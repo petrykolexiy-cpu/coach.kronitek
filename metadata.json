@@ -1,0 +1,7 @@
+{
+  "name": "Kronitek: Decision-Maker Trainer",
+  "description": "An interactive training simulator for Kronitek sales managers to practice and master the skill of reaching key decision-makers through realistic, AI-powered conversation scenarios.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
