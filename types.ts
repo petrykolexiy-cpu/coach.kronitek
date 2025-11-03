@@ -20,9 +20,3 @@ export interface Feedback {
   overallScore: number;
   summary: string;
 }
-
-export enum GamePhase {
-  ScenarioSelection,
-  InProgress,
-  Feedback,
-}

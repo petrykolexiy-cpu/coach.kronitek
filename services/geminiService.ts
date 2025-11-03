@@ -2,25 +2,20 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Scenario, ChatMessage, Feedback } from '../types';
 
-if (!process.env.API_KEY) {
-  throw new Error("API_KEY environment variable not set");
-}
-
+// Fix: Use process.env.API_KEY to align with coding guidelines and resolve TypeScript error.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-const model = ai.models;
-
-export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[]): Promise<string> {
+export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[]): Promise<{ text: string, connected: boolean }> {
   let complexityInstruction = '';
   switch (scenario.complexity) {
     case 'easy':
-      complexityInstruction = 'You are quite friendly and willing to help if the caller is polite and clearly states their purpose. You might offer a small hint or direct them to another employee.';
+      complexityInstruction = 'You are quite friendly and willing to help if the caller is polite and clearly states their purpose. You might offer a small hint or direct them to another employee. You are more likely to connect them if they seem professional.';
       break;
     case 'medium':
-      complexityInstruction = 'You act strictly according to instructions. Your main task is to find out the purpose and importance of the call. You do not fall for vague phrases and demand specifics.';
+      complexityInstruction = 'You act strictly according to instructions. Your main task is to find out the purpose and importance of the call. You do not fall for vague phrases and demand specifics. You will only connect them if they provide a very compelling reason.';
       break;
     case 'hard':
-      complexityInstruction = 'You are a true "guardian of the gate." You are extremely skeptical of any calls from salespeople. You will use various tactics to filter the call: demanding an email to the general address, asking about prior arrangements, transferring to other employees. Your persistence and resourcefulness are top-notch.';
+      complexityInstruction = 'You are a true "guardian of the gate." You are extremely skeptical of any calls from salespeople. You will use various tactics to filter the call: demanding an email to the general address, asking about prior arrangements, transferring to other employees. It should be exceptionally difficult for the manager to convince you to connect them. Only the most skilled and persuasive approach will work.';
       break;
   }
   
@@ -35,6 +30,12 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
     The user is a sales manager from the company "Kronitek" (https://kronitek.com/), who is trying to reach your manager.
     Be polite, but persistent. Do not disclose the direct number or email of the manager easily. Ask clarifying questions about the purpose of the call. 
     Your goal is to verify if this call is truly important for your boss. 
+    
+    If, and only if, the manager successfully persuades you (based on your persona and the scenario's difficulty), you must agree to connect them.
+    To signal that you are connecting them, your response MUST start with the special token "[CONNECT]".
+    For example: "[CONNECT]Alright, your reasoning is sound. I will put you through to Ivan Petrovich. Please hold."
+    Do not use the "[CONNECT]" token for any other purpose. If you are not connecting them, just respond normally.
+
     Respond concisely and professionally, as in a real phone conversation. Do not use markdown formatting.
   `;
 
@@ -44,7 +45,7 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
   }));
 
   try {
-    const response = await model.generateContent({
+    const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: contents,
       config: {
@@ -52,14 +53,22 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
         temperature: 0.8,
       }
     });
-    return response.text;
+    
+    let responseText = response.text;
+    const connected = responseText.startsWith('[CONNECT]');
+    if (connected) {
+        responseText = responseText.replace('[CONNECT]', '').trim();
+    }
+
+    return { text: responseText, connected };
+
   } catch (error) {
     console.error("Error getting gatekeeper response:", error);
-    return "Sorry, I'm experiencing a technical issue. Please try again.";
+    return { text: "Sorry, I'm experiencing a technical issue. Please try again.", connected: false };
   }
 }
 
-export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[]): Promise<Feedback | null> {
+export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean): Promise<Feedback | null> {
   const systemInstruction = `
     You are an expert trainer in B2B sales for industrial equipment. 
     Your task is to analyze the dialogue between a sales manager and a gatekeeper. 
@@ -77,11 +86,15 @@ export async function getPerformanceFeedback(scenario: Scenario, history: ChatMe
     Dialogue:
     ${conversationText}
     
-    Provide your analysis in JSON format.
+    Outcome: The manager ${success ? 'successfully reached the decision maker' : 'ended the simulation without reaching the decision maker'}.
+
+    Provide your analysis in JSON format. Your feedback should reflect the outcome.
+    If the manager succeeded, your "strengths" should highlight the specific tactics that led to success. Your "summary" should be congratulatory but still offer a key takeaway.
+    If the manager did not succeed, your "improvements" should focus on what they could have done differently to get past the gatekeeper.
   `;
 
   try {
-    const response = await model.generateContent({
+    const response = await ai.models.generateContent({
       model: 'gemini-2.5-pro',
       contents: prompt,
       config: {

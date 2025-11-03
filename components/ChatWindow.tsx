@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState } from 'react';
 import { ChatMessage, Scenario } from '../types';
 
@@ -7,6 +8,7 @@ interface ChatWindowProps {
   onSendMessage: (message: string) => void;
   onEndSimulation: () => void;
   isLoading: boolean;
+  isReadOnly?: boolean;
 }
 
 const UserIcon = () => (
@@ -51,7 +53,7 @@ const languages = [
   { code: 'fr-FR', name: 'French' },
 ];
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSendMessage, onEndSimulation, isLoading }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSendMessage, onEndSimulation, isLoading, isReadOnly = false }) => {
   const [input, setInput] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [selectedLang, setSelectedLang] = useState('en-US');
@@ -123,7 +125,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
     if (isRecording) {
       recognitionRef.current.stop();
     }
-    if (input.trim() && !isLoading) {
+    if (input.trim() && !isLoading && !isReadOnly) {
       onSendMessage(input.trim());
       setInput('');
     }
@@ -174,7 +176,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
                 value={selectedLang}
                 onChange={(e) => setSelectedLang(e.target.value)}
                 className="bg-slate-700 border border-slate-600 rounded-md px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-                disabled={isRecording || isLoading}
+                disabled={isRecording || isLoading || isReadOnly}
             >
                 {languages.map(lang => <option key={lang.code} value={lang.code}>{lang.name}</option>)}
             </select>
@@ -184,9 +186,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={isRecording ? "Listening..." : "Your response..."}
+            placeholder={isReadOnly ? "Simulation finished" : isRecording ? "Listening..." : "Your response..."}
             className="flex-1 bg-slate-700 border border-slate-600 rounded-md px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-            disabled={isLoading}
+            disabled={isLoading || isReadOnly}
           />
           <button
             type="button"
@@ -194,7 +196,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
             className={`p-2 rounded-md font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 isRecording ? 'bg-red-600 hover:bg-red-700 animate-pulse text-white' : 'bg-slate-600 hover:bg-slate-500 text-slate-200'
             }`}
-            disabled={isLoading}
+            disabled={isLoading || isReadOnly}
             title={isRecording ? 'Stop recording' : 'Start recording'}
           >
             <MicrophoneIcon />
@@ -202,15 +204,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
           <button
             type="submit"
             className="px-4 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors"
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || !input.trim() || isReadOnly}
           >
             Send
           </button>
         </form>
          <button
             onClick={onEndSimulation}
-            className="w-full mt-2 px-4 py-2 bg-rose-600 text-white rounded-md font-semibold hover:bg-rose-700 disabled:bg-slate-600 transition-colors"
-            disabled={isLoading || messages.length < 2}
+            className="w-full mt-2 px-4 py-2 bg-rose-600 text-white rounded-md font-semibold hover:bg-rose-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors"
+            disabled={isLoading || messages.length < 2 || isReadOnly}
           >
             End & Get Feedback
         </button>
