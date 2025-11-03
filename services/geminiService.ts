@@ -1,123 +1,146 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { Scenario, ChatMessage, Feedback } from '../types';
 
-// Fix: Use process.env.API_KEY to align with coding guidelines and resolve TypeScript error.
+// FIX: Use process.env.API_KEY and initialize GoogleGenAI directly as per the guidelines.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+
+// This function now calls the Gemini API to get a realistic gatekeeper response.
 export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[]): Promise<{ text: string, connected: boolean }> {
-  let complexityInstruction = '';
-  switch (scenario.complexity) {
-    case 'easy':
-      complexityInstruction = 'You are quite friendly and willing to help if the caller is polite and clearly states their purpose. You might offer a small hint or direct them to another employee. You are more likely to connect them if they seem professional.';
-      break;
-    case 'medium':
-      complexityInstruction = 'You act strictly according to instructions. Your main task is to find out the purpose and importance of the call. You do not fall for vague phrases and demand specifics. You will only connect them if they provide a very compelling reason.';
-      break;
-    case 'hard':
-      complexityInstruction = 'You are a true "guardian of the gate." You are extremely skeptical of any calls from salespeople. You will use various tactics to filter the call: demanding an email to the general address, asking about prior arrangements, transferring to other employees. It should be exceptionally difficult for the manager to convince you to connect them. Only the most skilled and persuasive approach will work.';
-      break;
-  }
+  const model = 'gemini-2.5-flash';
   
-  const systemInstruction = `
-    You are a professional secretary and assistant at a large industrial company, "${scenario.companyProfile}". 
-    Your task is to filter calls for your manager, "${scenario.decisionMaker}". 
-    Your character and behavior are defined by the scenario: "${scenario.gatekeeperPersona}".
+  const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
 
-    The difficulty level of this scenario is: ${scenario.complexity}. This should influence your behavior:
-    ${complexityInstruction}
+  const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation for a company called Kronitek.
+Your persona is: "${scenario.gatekeeperPersona}".
+The user is a sales manager trying to reach: "${scenario.decisionMaker}".
+The company profile is: "${scenario.companyProfile}".
+The simulation difficulty is: ${scenario.complexity}.
 
-    The user is a sales manager from the company "Kronitek" (https://kronitek.com/), who is trying to reach your manager.
-    Be polite, but persistent. Do not disclose the direct number or email of the manager easily. Ask clarifying questions about the purpose of the call. 
-    Your goal is to verify if this call is truly important for your boss. 
-    
-    If, and only if, the manager successfully persuades you (based on your persona and the scenario's difficulty), you must agree to connect them.
-    To signal that you are connecting them, your response MUST start with the special token "[CONNECT]".
-    For example: "[CONNECT]Alright, your reasoning is sound. I will put you through to Ivan Petrovich. Please hold."
-    Do not use the "[CONNECT]" token for any other purpose. If you are not connecting them, just respond normally.
+Your task is to respond naturally based on your persona and the conversation history.
+If the user's last message is persuasive, specific, and gives a strong reason to connect them, you should connect them.
+If it's vague, generic, or weak, you should politely probe for more information, deflect, or ask them to send an email, just like a real gatekeeper would.
+Do not break character. Your response should be just what the gatekeeper would say.
 
-    Respond concisely and professionally, as in a real phone conversation. Do not use markdown formatting.
-  `;
+Your entire output must be a single, valid JSON object with two keys:
+- "text": Your spoken response as a string.
+- "connected": A boolean value. Set to true ONLY if you are connecting the user, otherwise false.
 
-  const contents = history.map(msg => ({
-    role: msg.role,
-    parts: [{ text: msg.text }]
-  }));
+Example for a weak user message:
+User: "Hello, I'd like to discuss a proposal."
+Your JSON output: {"text": "Could you be more specific about the purpose of your call? We typically ask that general proposals be sent by email.", "connected": false}
+
+Example for a strong user message:
+User: "Hi, I'm following up on my conversation with ${scenario.decisionMaker} at the recent Tech Expo regarding the equipment modernization project."
+Your JSON output: {"text": "Oh, of course. He mentioned he was expecting a call. One moment, I'll put you through.", "connected": true}
+`;
+  
+  const contents = `Here is the conversation history so far:\n${formattedHistory}\n\nBased on this history, and especially the last user message, provide your JSON response.`;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model,
       contents: contents,
-      config: {
-        systemInstruction: systemInstruction,
-        temperature: 0.8,
-      }
-    });
-    
-    let responseText = response.text;
-    const connected = responseText.startsWith('[CONNECT]');
-    if (connected) {
-        responseText = responseText.replace('[CONNECT]', '').trim();
-    }
-
-    return { text: responseText, connected };
-
-  } catch (error) {
-    console.error("Error getting gatekeeper response:", error);
-    return { text: "Sorry, I'm experiencing a technical issue. Please try again.", connected: false };
-  }
-}
-
-export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean): Promise<Feedback | null> {
-  const systemInstruction = `
-    You are an expert trainer in B2B sales for industrial equipment. 
-    Your task is to analyze the dialogue between a sales manager and a gatekeeper. 
-    Provide constructive feedback on the manager's performance. 
-    Evaluate their strategy, the techniques used, strengths, and weaknesses. 
-    Offer specific, actionable advice for improvement.
-  `;
-
-  const conversationText = history.map(msg => `${msg.role === 'user' ? 'Manager' : 'Gatekeeper'}: ${msg.text}`).join('\n');
-  const prompt = `Analyze the following dialogue in the context of the scenario:
-    Scenario: ${scenario.title}
-    Description: ${scenario.description}
-    Gatekeeper Persona: ${scenario.gatekeeperPersona}
-    
-    Dialogue:
-    ${conversationText}
-    
-    Outcome: The manager ${success ? 'successfully reached the decision maker' : 'ended the simulation without reaching the decision maker'}.
-
-    Provide your analysis in JSON format. Your feedback should reflect the outcome.
-    If the manager succeeded, your "strengths" should highlight the specific tactics that led to success. Your "summary" should be congratulatory but still offer a key takeaway.
-    If the manager did not succeed, your "improvements" should focus on what they could have done differently to get past the gatekeeper.
-  `;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-pro',
-      contents: prompt,
       config: {
         systemInstruction: systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            strengths: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Strengths in the manager's actions (2-3 points)." },
-            improvements: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific tips for improvement (2-3 points)." },
-            overallScore: { type: Type.INTEGER, description: "Overall score on a 10-point scale." },
-            summary: { type: Type.STRING, description: "A brief summary and key takeaway for the manager." },
+            text: { type: Type.STRING },
+            connected: { type: Type.BOOLEAN },
           },
-          required: ["strengths", "improvements", "overallScore", "summary"]
-        }
+          required: ['text', 'connected'],
+        },
       },
     });
 
-    const jsonText = response.text;
-    return JSON.parse(jsonText) as Feedback;
+    const jsonString = response.text;
+    const responseObject = JSON.parse(jsonString);
+    return responseObject;
 
   } catch (error) {
-    console.error("Error getting performance feedback:", error);
-    return null;
+    console.error("Error calling Gemini API for gatekeeper response:", error);
+    // Provide a fallback response in case of an API error
+    return {
+      text: "I'm sorry, we seem to be experiencing some technical difficulties. Could you please call back in a few minutes?",
+      connected: false,
+    };
+  }
+}
+
+
+// This function now calls the Gemini API to get dynamic, personalized feedback.
+export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean): Promise<Feedback | null> {
+  const model = 'gemini-2.5-pro'; // Using a more powerful model for analysis
+  
+  const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
+  const outcome = success ? "The user successfully reached the decision-maker." : "The user did not reach the decision-maker.";
+
+  const systemInstruction = `You are an expert AI sales coach. Your task is to analyze a sales manager's performance in a role-play simulation where they tried to get past a gatekeeper.
+You will be given the scenario details, the full conversation transcript, and the final outcome.
+Your analysis must be objective, constructive, and actionable.
+
+Provide your feedback as a single, valid JSON object with the following structure:
+- "strengths": An array of 2-3 strings highlighting what the user did well.
+- "improvements": An array of 2-3 strings with specific suggestions for what to do better next time.
+- "summary": A concise paragraph (2-3 sentences) summarizing the overall performance and key takeaway.
+- "overallScore": A single integer between 1 and 10, where 1 is very poor and 10 is perfect. Base this score on the user's strategy, language, persistence, and the final outcome relative to the scenario's difficulty.
+`;
+
+  const contents = `
+**Scenario:**
+- Title: ${scenario.title}
+- Gatekeeper Persona: ${scenario.gatekeeperPersona}
+- Decision Maker: ${scenario.decisionMaker}
+- Difficulty: ${scenario.complexity}
+
+**Conversation Transcript:**
+${formattedHistory}
+
+**Final Outcome:** ${outcome}
+
+Please provide your detailed feedback in the specified JSON format.
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            strengths: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+            },
+            improvements: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+            },
+            summary: { type: Type.STRING },
+            overallScore: { type: Type.NUMBER },
+          },
+          required: ['strengths', 'improvements', 'summary', 'overallScore'],
+        },
+      },
+    });
+
+    const jsonString = response.text;
+    const feedbackObject = JSON.parse(jsonString);
+    return feedbackObject;
+
+  } catch (error) {
+    console.error("Error calling Gemini API for feedback:", error);
+    // Provide a fallback in case of an API error
+    return {
+      strengths: ["You participated in the simulation."],
+      improvements: ["The AI coach was unable to generate feedback due to a technical error. Please try again."],
+      summary: "An error occurred while generating feedback.",
+      overallScore: 0,
+    };
   }
 }

@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback } from 'react';
 import { Scenario, ChatMessage, Feedback } from './types';
 import { getGatekeeperResponse, getPerformanceFeedback } from './services/geminiService';
@@ -6,8 +5,8 @@ import { Header } from './components/Header';
 import { ScenarioSelector } from './components/ScenarioSelector';
 import { ChatWindow } from './components/ChatWindow';
 import { FeedbackPanel } from './components/FeedbackPanel';
+import { ApiKeyPrompt } from './components/ApiKeyPrompt';
 
-// A simple utility for delays
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 const App: React.FC = () => {
@@ -16,6 +15,10 @@ const App: React.FC = () => {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [isLoading, setIsLoading] = useState(false); // For chat responses
   const [isFeedbackLoading, setIsFeedbackLoading] = useState(false); // For feedback
+  const [isSimulationSuccess, setIsSimulationSuccess] = useState(false);
+  
+  // FIX: Removed API key check logic. As per guidelines, the API key is assumed to be available
+  // via process.env.API_KEY and is handled in geminiService.ts.
 
   const handleSelectScenario = useCallback((scenario: Scenario) => {
     setCurrentScenario(scenario);
@@ -23,14 +26,14 @@ const App: React.FC = () => {
     setFeedback(null);
   }, []);
 
-  const handleEndSimulation = useCallback(async (success: boolean = false) => {
+  const handleEndSimulation = useCallback(async () => {
     if (!currentScenario || messages.length < 2) return;
     
     setIsFeedbackLoading(true);
-    const performanceFeedback = await getPerformanceFeedback(currentScenario, messages, success);
+    const performanceFeedback = await getPerformanceFeedback(currentScenario, messages, isSimulationSuccess);
     setFeedback(performanceFeedback);
     setIsFeedbackLoading(false);
-  }, [currentScenario, messages]);
+  }, [currentScenario, messages, isSimulationSuccess]);
 
   const handleSendMessage = useCallback(async (messageText: string) => {
     if (!currentScenario) return;
@@ -47,15 +50,14 @@ const App: React.FC = () => {
       await delay(500);
       setMessages(prev => [...prev, { 
         role: 'model', 
-        text: `🎉 Success! You've reached ${currentScenario.decisionMaker}. Generating feedback...` 
+        text: `🎉 Success! You've reached ${currentScenario.decisionMaker}. Click "End & Get Feedback" to see your analysis.` 
       }]);
-      setIsLoading(false); // Stop chat loading indicator
-      await delay(1500);
-      await handleEndSimulation(true);
+      setIsSimulationSuccess(true);
+      setIsLoading(false);
     } else {
       setIsLoading(false);
     }
-  }, [currentScenario, messages, handleEndSimulation]);
+  }, [currentScenario, messages]);
 
   const handleRestart = () => {
     setCurrentScenario(null);
@@ -63,10 +65,11 @@ const App: React.FC = () => {
     setFeedback(null);
     setIsLoading(false);
     setIsFeedbackLoading(false);
+    setIsSimulationSuccess(false);
   };
   
   const showFeedbackPanel = isFeedbackLoading || !!feedback;
-  const isChatReadOnly = isFeedbackLoading || !!feedback;
+  const isChatReadOnly = isFeedbackLoading || !!feedback || isSimulationSuccess;
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-900">
@@ -76,18 +79,29 @@ const App: React.FC = () => {
           <ScenarioSelector onSelectScenario={handleSelectScenario} />
         ) : (
           <div className="container mx-auto p-4 md:p-8 flex-grow">
+             <div className="mb-6">
+                <button
+                    onClick={handleRestart}
+                    className="flex items-center gap-2 px-4 py-2 bg-slate-700 text-slate-200 rounded-md font-semibold hover:bg-slate-600 transition-colors"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+                    </svg>
+                    Back to Main Menu
+                </button>
+            </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full">
-              <div style={{height: 'calc(100vh - 150px)'}}>
+              <div style={{height: 'calc(100vh - 220px)'}}>
                 <ChatWindow
                     scenario={currentScenario}
                     messages={messages}
                     onSendMessage={handleSendMessage}
-                    onEndSimulation={() => handleEndSimulation(false)}
+                    onEndSimulation={handleEndSimulation}
                     isLoading={isLoading}
                     isReadOnly={isChatReadOnly}
                 />
               </div>
-              <div style={{height: 'calc(100vh - 150px)'}}>
+              <div style={{height: 'calc(100vh - 220px)'}}>
                 {showFeedbackPanel && (
                     <FeedbackPanel 
                         feedback={feedback} 
