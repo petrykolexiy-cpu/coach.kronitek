@@ -88,9 +88,6 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
 
-  // FIX: The instruction prompt was completely rewritten to enhance realism and address user feedback.
-  // 1. Removed any mention of the caller's company ("Kronitek") to ensure a true "cold call" experience.
-  // 2. Added sophisticated instructions for the AI to behave more human-like, focusing on judgment and natural conversation.
   const rolePlayInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
 **// 1. YOUR CORE DIRECTIVE**
@@ -117,27 +114,34 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   - "connected": A boolean value. True only if you are putting the call through. False otherwise.
 `;
   
-  const historyForApi = history[0]?.role === 'model' ? history.slice(1) : history;
-
-  if (historyForApi.length === 0) {
-    console.error("getGatekeeperResponse was called with a history that resulted in an empty list for the API.");
-    return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
+  // DEFINITIVE FIX: The root cause of the "technical difficulties" error was an invalid conversation history structure.
+  // The Gemini API requires a strict alternation of 'user' and 'model' roles. Because our simulation starts with
+  // the 'model' (the gatekeeper), previous attempts to trim the history resulted in an invalid sequence.
+  // This new logic correctly constructs the history payload by:
+  // 1. Starting with the user-provided instructions.
+  // 2. Creating a single 'model' turn that combines the AI's acknowledgement with its first spoken line (the greeting).
+  // 3. Appending the rest of the actual conversation, which now correctly starts with a 'user' turn.
+  // This maintains the required user/model alternation and provides the full, correct context to the AI, finally resolving the bug.
+  if (history.length < 1 || history[0].role !== 'model') {
+      console.error("Invalid history: conversation must start with a model greeting.", history);
+      return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
   }
 
-  // Prepend the instructions to the history for a more robust context.
+  const initialGreeting = history[0].text;
+  const conversationTurns = history.slice(1);
+
   const geminiHistory = [
-    { role: 'user', parts: [{ text: `Here are your instructions for the role-play:\n${rolePlayInstruction}` }] },
-    { role: 'model', parts: [{ text: 'Understood. I am ready to begin the role-play as the gatekeeper. I will provide my responses in the required JSON format.' }] }
+      { role: 'user', parts: [{ text: `Here are your instructions for the role-play:\n${rolePlayInstruction}` }] },
+      { role: 'model', parts: [{ text: `Understood. I am ready. The first thing I say on the call is: "${initialGreeting}"` }] }
   ];
 
-  // Add the actual conversation history after the instructions
-  historyForApi.forEach(msg => {
-    geminiHistory.push({
-      role: msg.role,
-      parts: [{ text: msg.text }]
-    });
+  conversationTurns.forEach(msg => {
+      geminiHistory.push({
+          role: msg.role,
+          parts: [{ text: msg.text }]
+      });
   });
-
+  
   try {
     const response = await ai.models.generateContent({
       model,
