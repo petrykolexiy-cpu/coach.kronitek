@@ -1,11 +1,10 @@
 import React, { useState, useCallback } from 'react';
 import { Scenario, ChatMessage, Feedback } from './types';
-import { getGatekeeperResponse, getPerformanceFeedback } from './services/geminiService';
+import { getInitialGreeting, getGatekeeperResponse, getPerformanceFeedback } from './services/geminiService';
 import { Header } from './components/Header';
 import { ScenarioSelector } from './components/ScenarioSelector';
 import { ChatWindow } from './components/ChatWindow';
 import { FeedbackPanel } from './components/FeedbackPanel';
-import { ApiKeyPrompt } from './components/ApiKeyPrompt';
 
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
@@ -13,36 +12,41 @@ const App: React.FC = () => {
   const [currentScenario, setCurrentScenario] = useState<Scenario | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [isLoading, setIsLoading] = useState(false); // For chat responses
-  const [isFeedbackLoading, setIsFeedbackLoading] = useState(false); // For feedback
+  const [isLoading, setIsLoading] = useState(false);
+  const [isFeedbackLoading, setIsFeedbackLoading] = useState(false);
   const [isSimulationSuccess, setIsSimulationSuccess] = useState(false);
-  
-  // FIX: Removed API key check logic. As per guidelines, the API key is assumed to be available
-  // via process.env.API_KEY and is handled in geminiService.ts.
+  const [selectedLang, setSelectedLang] = useState('en-US');
 
-  const handleSelectScenario = useCallback((scenario: Scenario) => {
+  const handleSelectScenario = useCallback(async (scenario: Scenario) => {
     setCurrentScenario(scenario);
-    setMessages([{ role: 'model', text: 'Hello, this is the front desk. How can I help you?' }]);
+    setMessages([]);
     setFeedback(null);
-  }, []);
+    setIsLoading(true);
+
+    const greeting = await getInitialGreeting(scenario, selectedLang);
+    setMessages([{ role: 'model', text: greeting }]);
+    
+    setIsLoading(false);
+  }, [selectedLang]);
 
   const handleEndSimulation = useCallback(async () => {
     if (!currentScenario || messages.length < 2) return;
     
     setIsFeedbackLoading(true);
-    const performanceFeedback = await getPerformanceFeedback(currentScenario, messages, isSimulationSuccess);
+    const performanceFeedback = await getPerformanceFeedback(currentScenario, messages, isSimulationSuccess, selectedLang);
     setFeedback(performanceFeedback);
     setIsFeedbackLoading(false);
-  }, [currentScenario, messages, isSimulationSuccess]);
+  }, [currentScenario, messages, isSimulationSuccess, selectedLang]);
 
   const handleSendMessage = useCallback(async (messageText: string) => {
     if (!currentScenario) return;
 
-    const newMessages: ChatMessage[] = [...messages, { role: 'user', text: messageText }];
+    const userMessage: ChatMessage = { role: 'user', text: messageText };
+    const newMessages: ChatMessage[] = [...messages, userMessage];
     setMessages(newMessages);
     setIsLoading(true);
 
-    const { text: response, connected } = await getGatekeeperResponse(currentScenario, newMessages);
+    const { text: response, connected } = await getGatekeeperResponse(currentScenario, newMessages, selectedLang);
 
     setMessages(prev => [...prev, { role: 'model', text: response }]);
     
@@ -53,11 +57,11 @@ const App: React.FC = () => {
         text: `🎉 Success! You've reached ${currentScenario.decisionMaker}. Click "End & Get Feedback" to see your analysis.` 
       }]);
       setIsSimulationSuccess(true);
-      setIsLoading(false);
-    } else {
-      setIsLoading(false);
-    }
-  }, [currentScenario, messages]);
+    } 
+    
+    setIsLoading(false);
+
+  }, [currentScenario, messages, selectedLang]);
 
   const handleRestart = () => {
     setCurrentScenario(null);
@@ -99,6 +103,8 @@ const App: React.FC = () => {
                     onEndSimulation={handleEndSimulation}
                     isLoading={isLoading}
                     isReadOnly={isChatReadOnly}
+                    selectedLang={selectedLang}
+                    onLangChange={setSelectedLang}
                 />
               </div>
               <div style={{height: 'calc(100vh - 220px)'}}>

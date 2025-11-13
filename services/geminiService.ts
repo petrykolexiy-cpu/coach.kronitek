@@ -1,20 +1,66 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Scenario, ChatMessage, Feedback } from '../types';
 
-// FIX: Use process.env.API_KEY and initialize GoogleGenAI directly as per the guidelines.
+// Fix: The API key must be obtained exclusively from process.env.API_KEY.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+// This new function calls the Gemini API to get a dynamic initial greeting.
+export async function getInitialGreeting(scenario: Scenario, language: string): Promise<string> {
+  const model = 'gemini-2.5-flash';
+  
+  const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation.
+You are NOT from Kronitek. You work for the company being called.
+Your persona is: "${scenario.gatekeeperPersona}".
+The company you work for is described as: "${scenario.companyProfile}".
+The user is a sales manager from a company called Kronitek, who is about to start a conversation with you.
 
-// This function now calls the Gemini API to get a realistic gatekeeper response.
-export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[]): Promise<{ text: string, connected: boolean }> {
+Your task is to provide the initial opening line a secretary would say when answering the phone. It should be brief and natural.
+Your entire output must be a single, valid JSON object with one key: "greeting".
+The response in the "greeting" field MUST be in the language specified by this code: ${language}.
+`;
+  
+  const contents = `Based on your persona and company profile, provide your initial greeting as a JSON object.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            greeting: { type: Type.STRING },
+          },
+          required: ['greeting'],
+        },
+      },
+    });
+
+    const jsonString = response.text;
+    const responseObject = JSON.parse(jsonString);
+    return responseObject.greeting;
+
+  } catch (error) {
+    console.error("Error calling Gemini API for initial greeting:", error);
+    // Fallback greeting in case of an error
+    return "Hello, this is the front desk. How can I help you?";
+  }
+}
+
+
+// This function calls the Gemini API to get a realistic gatekeeper response.
+export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[], language:string): Promise<{ text: string, connected: boolean }> {
   const model = 'gemini-2.5-flash';
   
   const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
 
-  const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation for a company called Kronitek.
+  const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation.
+You are NOT from Kronitek. You work for the company being called.
 Your persona is: "${scenario.gatekeeperPersona}".
-The user is a sales manager trying to reach: "${scenario.decisionMaker}".
-The company profile is: "${scenario.companyProfile}".
+The user is a sales manager from a company called Kronitek, trying to reach: "${scenario.decisionMaker}".
+The company you work for is described as: "${scenario.companyProfile}".
 The simulation difficulty is: ${scenario.complexity}.
 
 Your task is to respond naturally based on your persona and the conversation history.
@@ -25,14 +71,7 @@ Do not break character. Your response should be just what the gatekeeper would s
 Your entire output must be a single, valid JSON object with two keys:
 - "text": Your spoken response as a string.
 - "connected": A boolean value. Set to true ONLY if you are connecting the user, otherwise false.
-
-Example for a weak user message:
-User: "Hello, I'd like to discuss a proposal."
-Your JSON output: {"text": "Could you be more specific about the purpose of your call? We typically ask that general proposals be sent by email.", "connected": false}
-
-Example for a strong user message:
-User: "Hi, I'm following up on my conversation with ${scenario.decisionMaker} at the recent Tech Expo regarding the equipment modernization project."
-Your JSON output: {"text": "Oh, of course. He mentioned he was expecting a call. One moment, I'll put you through.", "connected": true}
+The response in the "text" field MUST be in the language specified by this code: ${language}.
 `;
   
   const contents = `Here is the conversation history so far:\n${formattedHistory}\n\nBased on this history, and especially the last user message, provide your JSON response.`;
@@ -61,7 +100,6 @@ Your JSON output: {"text": "Oh, of course. He mentioned he was expecting a call.
 
   } catch (error) {
     console.error("Error calling Gemini API for gatekeeper response:", error);
-    // Provide a fallback response in case of an API error
     return {
       text: "I'm sorry, we seem to be experiencing some technical difficulties. Could you please call back in a few minutes?",
       connected: false,
@@ -70,9 +108,9 @@ Your JSON output: {"text": "Oh, of course. He mentioned he was expecting a call.
 }
 
 
-// This function now calls the Gemini API to get dynamic, personalized feedback.
-export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean): Promise<Feedback | null> {
-  const model = 'gemini-2.5-pro'; // Using a more powerful model for analysis
+// This function calls the Gemini API to get dynamic, personalized feedback at the end.
+export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean, language: string): Promise<Feedback | null> {
+  const model = 'gemini-2.5-pro';
   
   const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
   const outcome = success ? "The user successfully reached the decision-maker." : "The user did not reach the decision-maker.";
@@ -86,6 +124,8 @@ Provide your feedback as a single, valid JSON object with the following structur
 - "improvements": An array of 2-3 strings with specific suggestions for what to do better next time.
 - "summary": A concise paragraph (2-3 sentences) summarizing the overall performance and key takeaway.
 - "overallScore": A single integer between 1 and 10, where 1 is very poor and 10 is perfect. Base this score on the user's strategy, language, persistence, and the final outcome relative to the scenario's difficulty.
+
+All text fields in your JSON response MUST be in the language specified by this code: ${language}.
 `;
 
   const contents = `
@@ -135,7 +175,6 @@ Please provide your detailed feedback in the specified JSON format.
 
   } catch (error) {
     console.error("Error calling Gemini API for feedback:", error);
-    // Provide a fallback in case of an API error
     return {
       strengths: ["You participated in the simulation."],
       improvements: ["The AI coach was unable to generate feedback due to a technical error. Please try again."],

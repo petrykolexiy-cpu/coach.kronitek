@@ -9,6 +9,8 @@ interface ChatWindowProps {
   onEndSimulation: () => void;
   isLoading: boolean;
   isReadOnly?: boolean;
+  selectedLang: string;
+  onLangChange: (lang: string) => void;
 }
 
 const UserIcon = () => (
@@ -48,15 +50,16 @@ declare global {
 const languages = [
   { code: 'en-US', name: 'English (US)' },
   { code: 'ru-RU', name: 'Russian' },
+  { code: 'uk-UA', name: 'Ukrainian' },
   { code: 'de-DE', name: 'German' },
   { code: 'es-ES', name: 'Spanish' },
   { code: 'fr-FR', name: 'French' },
+  { code: 'fil-PH', name: 'Filipino' },
 ];
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSendMessage, onEndSimulation, isLoading, isReadOnly = false }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSendMessage, onEndSimulation, isLoading, isReadOnly = false, selectedLang, onLangChange }) => {
   const [input, setInput] = useState('');
   const [isRecording, setIsRecording] = useState(false);
-  const [selectedLang, setSelectedLang] = useState('en-US');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
 
@@ -140,17 +143,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
       <div className="flex-1 p-4 overflow-y-auto">
         <div className="space-y-4">
           {messages.map((msg, index) => (
-            <div key={index} className={`flex items-end gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              {msg.role === 'model' && <div className="flex-shrink-0 bg-slate-700 rounded-full p-2"><RobotIcon /></div>}
-              <div
-                className={`max-w-md lg:max-w-lg px-4 py-2 rounded-lg ${
-                  msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-200 rounded-bl-none'
-                }`}
-              >
-                <p style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</p>
+              <div key={index} className={`flex items-end gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                {msg.role === 'model' && <div className="flex-shrink-0 bg-slate-700 rounded-full p-2"><RobotIcon /></div>}
+                <div
+                  className={`max-w-md lg:max-w-lg px-4 py-2 rounded-lg ${
+                    msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-200 rounded-bl-none'
+                  }`}
+                >
+                  <p style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</p>
+                </div>
+                 {msg.role === 'user' && <div className="flex-shrink-0 bg-blue-600 text-white rounded-full p-2"><UserIcon /></div>}
               </div>
-               {msg.role === 'user' && <div className="flex-shrink-0 bg-blue-600 text-white rounded-full p-2"><UserIcon /></div>}
-            </div>
           ))}
           {isLoading && (
              <div className="flex items-end gap-2 justify-start">
@@ -174,7 +177,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
             <select
                 id="language-select"
                 value={selectedLang}
-                onChange={(e) => setSelectedLang(e.target.value)}
+                onChange={(e) => onLangChange(e.target.value)}
                 className="bg-slate-700 border border-slate-600 rounded-md px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
                 disabled={isRecording || isLoading || isReadOnly}
             >
