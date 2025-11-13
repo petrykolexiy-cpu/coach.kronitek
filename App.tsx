@@ -107,7 +107,7 @@ const App: React.FC = () => {
                       Back to Main Menu
                   </button>
               </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-grow min-h-0">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-grow">
                 <ChatWindow
                     scenario={currentScenario}
                     messages={messages}
