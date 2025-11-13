@@ -1,11 +1,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Scenario, ChatMessage, Feedback } from '../types';
 
-// Fix: The API key must be obtained exclusively from process.env.API_KEY.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 // This new function calls the Gemini API to get a dynamic initial greeting.
 export async function getInitialGreeting(scenario: Scenario, language: string): Promise<string> {
+  // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
   
   const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation.
@@ -52,6 +51,8 @@ The response in the "greeting" field MUST be in the language specified by this c
 
 // This function calls the Gemini API to get a realistic gatekeeper response.
 export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[], language:string): Promise<{ text: string, connected: boolean }> {
+  // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
   
   const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
@@ -110,6 +111,8 @@ The response in the "text" field MUST be in the language specified by this code:
 
 // This function calls the Gemini API to get dynamic, personalized feedback at the end.
 export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean, language: string): Promise<Feedback | null> {
+  // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-pro';
   
   const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
