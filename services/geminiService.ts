@@ -86,27 +86,25 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
     return `${role}: ${msg.text}`;
   }).join('\n\n');
 
-  // ARCHITECTURAL FIX 11.0: The Right Tool for the Job.
-  // After multiple architectural changes, the instability persisted. The root cause was not the prompt structure
-  // but the capability of the model itself. The task of role-playing, analyzing context, making a judgment
-  // call, AND adhering to a strict JSON format simultaneously was too complex for the 'gemini-2.5-flash' model,
-  // causing it to fail under cognitive load.
+  // ARCHITECTURAL FIX 12.0: The Principle of the Single, Unambiguous Task.
+  // The root cause of the persistent instability was a subtle conflict created by separating instructions
+  // between `systemInstruction` and `contents`. The AI model struggled to reconcile the creative,
+  // role-playing context with the rigid, technical JSON output requirement when they were provided
+  // as two separate inputs.
   //
-  // This definitive fix upgrades the model to 'gemini-2.5-pro'—the same powerful model used for feedback
-  // analysis. This model is specifically designed for complex reasoning and creative tasks, ensuring it can
-  // reliably handle the simulation's demands and provide a stable user experience.
-  const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
+  // This definitive fix consolidates ALL information—persona, rules, history, and the final task—into
+  // a single, highly-structured "monolithic prompt". This provides the model with one clear, unambiguous
+  // set of instructions per turn, eliminating any conflict. The technical requirement (JSON output) is
+  // now an inseparable part of the core task, ensuring maximum compliance and stability.
+  const fullPrompt = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
-**// 1. YOUR CORE DIRECTIVE**
-Your primary responsibility is to protect the time and focus of the decision-maker, "${scenario.decisionMaker}". Your goal is NOT to block everyone, but to filter out calls that are not a valuable use of the decision-maker's time.
+**//-- SCENARIO CONTEXT --//**
+- **Your Persona:** "${scenario.gatekeeperPersona}"
+- **Your Company:** You work for a company with this profile: "${scenario.companyProfile}"
+- **Decision-Maker to Protect:** "${scenario.decisionMaker}"
+- **Simulation Difficulty:** '${scenario.complexity}'
 
-**// 2. YOUR CHARACTER**
-- **Your Persona:** "${scenario.gatekeeperPersona}". Embody this completely in your tone and responses.
-- **Your Company:** You work for a company with this profile: "${scenario.companyProfile}".
-- **The Caller:** You have NO prior knowledge of the person calling.
-- **Difficulty:** The simulation difficulty is '${scenario.complexity}'. Calibrate your level of assistance or resistance accordingly.
-
-**// 3. YOUR CONVERSATIONAL RULES**
+**//-- CONVERSATIONAL RULES --//**
 1.  **BE HUMAN:** Respond naturally to the flow of the conversation. Listen to what the caller says and react to it. Avoid canned phrases.
 2.  **NEVER VOLUNTEER INFORMATION:** Do not reveal the name of "${scenario.decisionMaker}" unless the caller mentions them first. Do not suggest solutions or other contacts.
 3.  **PROBE FOR CLARITY:** If the caller is vague (e.g., "I'd like to discuss business opportunities"), politely but firmly ask for specifics.
@@ -114,28 +112,26 @@ Your primary responsibility is to protect the time and focus of the decision-mak
     - **Connect the Call (set "connected": true):** Only if the caller demonstrates professionalism, research, and provides a specific, compelling, benefit-oriented reason for the call.
     - **Maintain the Gate (set "connected": false):** For all other cases. You might offer to take a message, direct them to a generic email, or state that the person is unavailable.
 
-**// 4. TECHNICAL REQUIREMENTS**
-- **Your entire output must be a single, valid JSON object** with two keys: "text" (your spoken response as a string) and "connected" (a boolean value).
-- **Your spoken response in the "text" field MUST be in the language specified in the user's prompt.**`;
-  
-  const userPrompt = `
-**Language for this response:** ${language}
-
----
-**Conversation History:**
+**//-- CONVERSATION HISTORY --//**
 ${formattedHistory}
----
 
-**Your Task:**
-Based on your instructions and the conversation history above, generate your next response in the required JSON format.
-`;
+**//-- YOUR TASK --//**
+1.  Analyze the entire conversation history based on the rules and scenario context provided above.
+2.  Based on your analysis, decide whether to connect the call to the decision-maker. This is the most critical part of your judgment.
+3.  Formulate your next spoken response in this language: **${language}**.
+4.  Your **ENTIRE** output must be a single, valid JSON object with ONLY these two keys: "text" (your spoken response) and "connected" (your boolean decision).
 
+Example of a valid output:
+{
+  "text": "He's in a meeting at the moment. May I ask what this is regarding?",
+  "connected": false
+}`;
+  
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: userPrompt, // The dynamic part
+      contents: fullPrompt, 
       config: {
-        systemInstruction, // The static context and rules
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
