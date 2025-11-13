@@ -46,17 +46,10 @@ The greeting must be in this language: ${language}.
 Your entire output must be a single, valid JSON object with one key: "greeting".
 Example format: {"greeting": "Good morning, Fresh Veggies Inc."}`;
 
-  // FIX: Replaced unstable `systemInstruction` with a robust instruction-embedding method
-  // to prevent API errors and ensure stable generation of the initial greeting.
-  const contents = [
-      { role: 'user', parts: [{ text: instruction }] },
-      { role: 'model', parts: [{ text: 'Understood. I will provide a professional greeting in the specified language and JSON format.' }] }
-  ];
-
   try {
     const response = await ai.models.generateContent({
       model,
-      contents,
+      contents: instruction,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -114,39 +107,23 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   - "connected": A boolean value. True only if you are putting the call through. False otherwise.
 `;
   
-  // DEFINITIVE FIX: The root cause of the "technical difficulties" error was an invalid conversation history structure.
-  // The Gemini API requires a strict alternation of 'user' and 'model' roles. Because our simulation starts with
-  // the 'model' (the gatekeeper), previous attempts to trim the history resulted in an invalid sequence.
-  // This new logic correctly constructs the history payload by:
-  // 1. Starting with the user-provided instructions.
-  // 2. Creating a single 'model' turn that combines the AI's acknowledgement with its first spoken line (the greeting).
-  // 3. Appending the rest of the actual conversation, which now correctly starts with a 'user' turn.
-  // This maintains the required user/model alternation and provides the full, correct context to the AI, finally resolving the bug.
-  if (history.length < 1 || history[0].role !== 'model') {
-      console.error("Invalid history: conversation must start with a model greeting.", history);
-      return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
-  }
-
-  const initialGreeting = history[0].text;
-  const conversationTurns = history.slice(1);
-
-  const geminiHistory = [
-      { role: 'user', parts: [{ text: `Here are your instructions for the role-play:\n${rolePlayInstruction}` }] },
-      { role: 'model', parts: [{ text: `Understood. I am ready. The first thing I say on the call is: "${initialGreeting}"` }] }
+  // DEFINITIVE FIX: The Gemini API has a strict rule that conversation histories must start with a 'user' role.
+  // Our simulation starts with a 'model' role (the secretary), which caused the persistent error.
+  // This new logic solves the problem by prepending a neutral 'user' message to the history.
+  // This makes the entire conversation history valid for the API, finally resolving the bug.
+  const contents = [
+      { role: 'user', parts: [{ text: "Let's begin the role-play." }] },
+      ...history.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }))
   ];
 
-  conversationTurns.forEach(msg => {
-      geminiHistory.push({
-          role: msg.role,
-          parts: [{ text: msg.text }]
-      });
-  });
-  
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: geminiHistory,
+      contents: contents,
       config: {
+        // The role-play instructions are now provided as a stable system instruction,
+        // which is the correct way to give an AI its persona for a conversation.
+        systemInstruction: rolePlayInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -178,7 +155,8 @@ export async function getPerformanceFeedback(scenario: Scenario, history: ChatMe
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-pro';
   
-  const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
+  // A more readable format for the AI to analyze.
+  const formattedHistory = history.map(msg => `${msg.role === 'user' ? 'Sales Manager' : 'Gatekeeper'}: ${msg.text}`).join('\n');
   const outcome = success ? "The user successfully reached the decision-maker." : "The user did not reach the decision-maker.";
 
   const systemInstruction = `You are an expert AI sales coach. Your task is to analyze a sales manager's performance in a role-play simulation where they tried to get past a gatekeeper.
@@ -194,7 +172,9 @@ Provide your feedback as a single, valid JSON object with the following structur
 **VERY IMPORTANT:** All text fields in your JSON response MUST be in the language specified by this code: ${language}.
 `;
 
-  const contents = `
+  const userPrompt = `
+**Analysis Request**
+
 **Scenario:**
 - Title: ${scenario.title}
 - Gatekeeper Persona: ${scenario.gatekeeperPersona}
@@ -212,7 +192,7 @@ Please provide your detailed feedback in the specified JSON format.
   try {
     const response = await ai.models.generateContent({
       model,
-      contents,
+      contents: userPrompt,
       config: {
         systemInstruction,
         responseMimeType: "application/json",
