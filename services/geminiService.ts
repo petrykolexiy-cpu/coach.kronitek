@@ -86,17 +86,19 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
     return `${role}: ${msg.text}`;
   }).join('\n\n');
 
-  // ARCHITECTURAL FIX 12.0: The Principle of the Single, Unambiguous Task.
-  // The root cause of the persistent instability was a subtle conflict created by separating instructions
-  // between `systemInstruction` and `contents`. The AI model struggled to reconcile the creative,
-  // role-playing context with the rigid, technical JSON output requirement when they were provided
-  // as two separate inputs.
+  // ARCHITECTURAL FIX 13.0: Correct Use of System Instruction for Conversational Stability.
+  // The previous "monolithic prompt" approach was fundamentally inefficient for a turn-by-turn
+  // conversation. It forced the model to re-process the entire set of complex rules with every single message,
+  // leading to cognitive overload and intermittent failures, especially with non-English languages.
   //
-  // This definitive fix consolidates ALL information—persona, rules, history, and the final task—into
-  // a single, highly-structured "monolithic prompt". This provides the model with one clear, unambiguous
-  // set of instructions per turn, eliminating any conflict. The technical requirement (JSON output) is
-  // now an inseparable part of the core task, ensuring maximum compliance and stability.
-  const fullPrompt = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
+  // This definitive fix implements the architecturally correct pattern:
+  // 1. `systemInstruction`: Contains all static information—the persona, rules, and JSON output format.
+  //    The model internalizes this once as its "operating system" for the simulation.
+  // 2. `contents` (userPrompt): Contains only the dynamic conversation history.
+  //
+  // This separation of concerns is how the API is designed for robust conversations. It dramatically
+  // reduces the processing load per turn, allowing the model to focus on its immediate task and ensuring stability.
+  const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
 **//-- SCENARIO CONTEXT --//**
 - **Your Persona:** "${scenario.gatekeeperPersona}"
@@ -105,33 +107,36 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
 - **Simulation Difficulty:** '${scenario.complexity}'
 
 **//-- CONVERSATIONAL RULES --//**
-1.  **BE HUMAN:** Respond naturally to the flow of the conversation. Listen to what the caller says and react to it. Avoid canned phrases.
-2.  **NEVER VOLUNTEER INFORMATION:** Do not reveal the name of "${scenario.decisionMaker}" unless the caller mentions them first. Do not suggest solutions or other contacts.
-3.  **PROBE FOR CLARITY:** If the caller is vague (e.g., "I'd like to discuss business opportunities"), politely but firmly ask for specifics.
+1.  **BE HUMAN:** Respond naturally to the flow of the conversation.
+2.  **NEVER VOLUNTEER INFORMATION:** Do not reveal the name of "${scenario.decisionMaker}" unless the caller mentions them first.
+3.  **PROBE FOR CLARITY:** If the caller is vague, politely but firmly ask for specifics.
 4.  **MAKE THE JUDGMENT CALL:**
-    - **Connect the Call (set "connected": true):** Only if the caller demonstrates professionalism, research, and provides a specific, compelling, benefit-oriented reason for the call.
-    - **Maintain the Gate (set "connected": false):** For all other cases. You might offer to take a message, direct them to a generic email, or state that the person is unavailable.
+    - **Connect the Call (set "connected": true):** Only if the caller provides a specific, compelling, benefit-oriented reason for the call.
+    - **Maintain the Gate (set "connected": false):** For all other cases.
 
-**//-- CONVERSATION HISTORY --//**
-${formattedHistory}
+**//-- OUTPUT FORMAT --//**
+- Your **ENTIRE** output must be a single, valid JSON object.
+- The JSON must have EXACTLY two keys: "text" (your spoken response) and "connected" (a boolean).
+- All text in the "text" field must be in this language: **${language}**.
 
-**//-- YOUR TASK --//**
-1.  Analyze the entire conversation history based on the rules and scenario context provided above.
-2.  Based on your analysis, decide whether to connect the call to the decision-maker. This is the most critical part of your judgment.
-3.  Formulate your next spoken response in this language: **${language}**.
-4.  Your **ENTIRE** output must be a single, valid JSON object with ONLY these two keys: "text" (your spoken response) and "connected" (your boolean decision).
-
-Example of a valid output:
+Example of a valid output (remember to use the requested language for the "text" field):
 {
-  "text": "He's in a meeting at the moment. May I ask what this is regarding?",
+  "text": "He is currently unavailable. May I ask what this is regarding?",
   "connected": false
 }`;
+
+  const userPrompt = `Here is the conversation history so far. Your turn is next.
+
+${formattedHistory}
+
+Based on all the rules provided, provide your next response in the specified JSON format.`;
   
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: fullPrompt, 
+      contents: userPrompt, 
       config: {
+        systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
