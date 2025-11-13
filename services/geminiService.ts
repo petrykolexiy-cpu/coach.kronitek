@@ -81,7 +81,22 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
 
-  const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
+  const formattedHistory = history.map(msg => {
+    const role = msg.role === 'user' ? 'Caller' : 'You (Gatekeeper)';
+    return `${role}: ${msg.text}`;
+  }).join('\n\n');
+
+  // ARCHITECTURAL FIX 9.0: The definitive, robust fix.
+  // The root cause of all instability was ambiguity in the instructions sent to the model.
+  // The previous approach sent a separate `systemInstruction` and a `userPrompt`. This created
+  // a situation where the AI had to process two distinct instruction sets, which, under the
+  // cognitive load of complex role-play and strict JSON formatting, led to failures.
+  //
+  // This new approach combines EVERYTHING into a single, monolithic prompt. There is no longer
+  // a separate `systemInstruction`. The model receives one clear, unambiguous block of text
+  // containing all rules, context, and its final task. This is the simplest and most reliable
+  // way to ensure a consistent response.
+  const fullPrompt = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
 **// 1. YOUR CORE DIRECTIVE**
 Your primary responsibility is to protect the time and focus of the decision-maker, "${scenario.decisionMaker}". You are their trusted partner. Every call you screen is a judgment call. Your goal is NOT to block everyone, but to filter out calls that are not a valuable use of the decision-maker's time.
@@ -105,41 +120,22 @@ Your primary responsibility is to protect the time and focus of the decision-mak
 - **Output Format:** Your entire output must be a single, valid JSON object with two keys:
   - "text": Your spoken response as a string.
   - "connected": A boolean value. True only if you are putting the call through. False otherwise.
-`;
-  
-  // ARCHITECTURAL FIX 8.0: The definitive, robust fix.
-  // The root cause of all instability was forcing the API's multi-turn chat model (`contents` array)
-  // to handle a scenario it's not designed for (a conversation starting with the 'model' role).
-  // All previous attempts were "hacks" to make the history array structurally valid, but they
-  // created logical confusion for the AI, causing it to fail, especially on longer conversations.
-  //
-  // This new approach abandons the chat history model entirely for this function. Instead, it
-  // formats the entire conversation history into a single string (a transcript). This string is
-  // then passed as a simple, one-shot prompt. This completely sidesteps the role-alternation
-  // problem and provides a clean, unambiguous context to the AI on every turn. This is a far
-  // more robust and reliable method for this specific use case.
-  
-  const formattedHistory = history.map(msg => {
-    const role = msg.role === 'user' ? 'Caller' : 'You (Gatekeeper)';
-    return `${role}: ${msg.text}`;
-  }).join('\n\n');
 
-  const userPrompt = `
-Based on your persona and the conversation history below, generate your next response.
+---
 
 **Conversation History:**
 ${formattedHistory}
 
 **Your Task:**
-Provide the very next thing you would say as the gatekeeper.
+Based on all the rules and the conversation history above, generate your next response in the required JSON format.
 `;
 
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: userPrompt, // Use the single, formatted prompt instead of a history array
+      contents: fullPrompt, // Use the single, monolithic prompt.
       config: {
-        systemInstruction: systemInstruction,
+        // No systemInstruction. All instructions are in the main prompt.
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
