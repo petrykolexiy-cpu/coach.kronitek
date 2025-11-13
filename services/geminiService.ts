@@ -4,7 +4,7 @@ import { Scenario, ChatMessage, Feedback } from '../types';
 // This new function calls the Gemini API to get a dynamic initial greeting.
 export async function getInitialGreeting(scenario: Scenario, language: string): Promise<string> {
   // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
-  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_KEY.
+  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_key.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
   
@@ -12,11 +12,12 @@ export async function getInitialGreeting(scenario: Scenario, language: string): 
 You are NOT from Kronitek. You work for the company being called.
 Your persona is: "${scenario.gatekeeperPersona}".
 The company you work for is described as: "${scenario.companyProfile}".
-The user is a sales manager from a company called Kronitek, who is about to start a conversation with you.
 
-Your task is to provide the initial opening line a secretary would say when answering the phone. It should be brief and natural.
+Your task is to provide the very first, initial opening line a secretary would say when answering a business phone call. It must be brief, professional, and natural.
+Examples: "Good morning, [Company Name], how may I help you?", "Front desk, speaking.", "Hello, you've reached [Company Name]."
+
 Your entire output must be a single, valid JSON object with one key: "greeting".
-The response in the "greeting" field MUST be in the language specified by this code: ${language}.
+The greeting MUST be in the language specified by this code: ${language}.
 `;
   
   const contents = `Based on your persona and company profile, provide your initial greeting as a JSON object.`;
@@ -56,31 +57,37 @@ The response in the "greeting" field MUST be in the language specified by this c
 // This function calls the Gemini API to get a realistic gatekeeper response.
 export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[], language:string): Promise<{ text: string, connected: boolean }> {
   // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
-  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_KEY.
+  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_key.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
   
   const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
 
-  const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation.
-You are NOT from Kronitek. You work for the company being called.
-Your persona is: "${scenario.gatekeeperPersona}".
-The user is a sales manager from a company called Kronitek, trying to reach: "${scenario.decisionMaker}".
-The company you work for is described as: "${scenario.companyProfile}".
-The simulation difficulty is: ${scenario.complexity}.
+  const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation. You are a top-tier professional.
 
-Your task is to respond naturally based on your persona and the conversation history.
-If the user's last message is persuasive, specific, and gives a strong reason to connect them, you should connect them.
-If it's vague, generic, or weak, you should politely probe for more information, deflect, or ask them to send an email, just like a real gatekeeper would.
-Do not break character. Your response should be just what the gatekeeper would say.
+**Your Character & Context:**
+- Your Persona: "${scenario.gatekeeperPersona}". Embody this fully.
+- Your Company: "${scenario.companyProfile}".
+- Your Goal: To professionally screen calls for the decision-maker, "${scenario.decisionMaker}", protecting their time from unsolicited sales calls.
+- The Caller: A sales manager from a company called "Kronitek".
+- Simulation Difficulty: ${scenario.complexity}. Adjust your resistance accordingly.
 
+**Core Instructions:**
+1.  **Be Human-like & Context-Aware:** Respond based on the flow of the conversation. Do not follow a rigid script.
+2.  **DO NOT Mention the Decision-Maker:** Do not say the name or title of "${scenario.decisionMaker}" unless the user says it first. This is a critical rule. Your job is to find out who is calling and why, not to volunteer information.
+3.  **Act Professionally:** If the user is vague, politely ask for specifics ("Could you tell me what this is regarding?"). If they are pushy, be firm but professional. If they provide a compelling reason, consider connecting them.
+4.  **Evaluate the User's Strategy:**
+    - **Connect them (set "connected": true):** Only if the user is respectful, clearly states a valuable and specific purpose for the call, and successfully persuades you that the call is worth the decision-maker's time.
+    - **Block or Probe (set "connected": false):** If the user is generic ("I'd like to talk about your needs"), evasive, or fails to build rapport. In this case, you might ask them to send an email, ask for more details, or state that the person is unavailable.
+5.  **Language:** Your entire spoken response in the "text" field MUST be in the language specified by this code: ${language}. This is non-negotiable.
+
+**Output Format:**
 Your entire output must be a single, valid JSON object with two keys:
 - "text": Your spoken response as a string.
-- "connected": A boolean value. Set to true ONLY if you are connecting the user, otherwise false.
-The response in the "text" field MUST be in the language specified by this code: ${language}.
+- "connected": A boolean value. Set to true ONLY if you are connecting the user to the decision-maker. Otherwise, it must be false.
 `;
   
-  const contents = `Here is the conversation history so far:\n${formattedHistory}\n\nBased on this history, and especially the last user message, provide your JSON response.`;
+  const contents = `Here is the conversation history so far:\n${formattedHistory}\n\nBased on this history and your instructions, and especially the last user message, provide your JSON response.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -120,7 +127,7 @@ The response in the "text" field MUST be in the language specified by this code:
 // This function calls the Gemini API to get dynamic, personalized feedback at the end.
 export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean, language: string): Promise<Feedback | null> {
   // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
-  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_KEY.
+  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_key.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-pro';
   
@@ -137,7 +144,7 @@ Provide your feedback as a single, valid JSON object with the following structur
 - "summary": A concise paragraph (2-3 sentences) summarizing the overall performance and key takeaway.
 - "overallScore": A single integer between 1 and 10, where 1 is very poor and 10 is perfect. Base this score on the user's strategy, language, persistence, and the final outcome relative to the scenario's difficulty.
 
-All text fields in your JSON response MUST be in the language specified by this code: ${language}.
+**VERY IMPORTANT:** All text fields in your JSON response MUST be in the language specified by this code: ${language}.
 `;
 
   const contents = `
