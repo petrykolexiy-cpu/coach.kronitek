@@ -43,26 +43,37 @@ const App: React.FC = () => {
     if (!currentScenario) return;
 
     const userMessage: ChatMessage = { role: 'user', text: messageText };
-    const newMessages: ChatMessage[] = [...messages, userMessage];
-    setMessages(newMessages);
+    
+    // Create the definitive history for this turn's API call *before* any state updates.
+    const historyForApi = [...messages, userMessage];
+
+    // Optimistically update the UI with the user's message.
+    setMessages(historyForApi); 
     setIsLoading(true);
 
-    const { text: response, connected } = await getGatekeeperResponse(currentScenario, newMessages, selectedLang);
+    const { text: response, connected } = await getGatekeeperResponse(currentScenario, historyForApi, selectedLang);
 
-    setMessages(prev => [...prev, { role: 'model', text: response }]);
+    // After the API call, prepare all new messages from the model.
+    const modelMessages: ChatMessage[] = [{ role: 'model', text: response }];
+
+    if (connected) {
+        await delay(500);
+        modelMessages.push({ 
+            role: 'model', 
+            text: `🎉 Success! You've reached ${currentScenario.decisionMaker}. Click "End & Get Feedback" to see your analysis.` 
+        });
+    }
+
+    // Append all model messages in a single, atomic update.
+    setMessages(prev => [...prev, ...modelMessages]);
     
     if (connected) {
-      await delay(500);
-      setMessages(prev => [...prev, { 
-        role: 'model', 
-        text: `🎉 Success! You've reached ${currentScenario.decisionMaker}. Click "End & Get Feedback" to see your analysis.` 
-      }]);
-      setIsSimulationSuccess(true);
-    } 
+        setIsSimulationSuccess(true);
+    }
     
     setIsLoading(false);
-
   }, [currentScenario, messages, selectedLang]);
+
 
   const handleRestart = () => {
     setCurrentScenario(null);
@@ -97,27 +108,23 @@ const App: React.FC = () => {
                   </button>
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-grow min-h-0">
-                <div>
-                  <ChatWindow
-                      scenario={currentScenario}
-                      messages={messages}
-                      onSendMessage={handleSendMessage}
-                      onEndSimulation={handleEndSimulation}
-                      isLoading={isLoading}
-                      isReadOnly={isChatReadOnly}
-                      selectedLang={selectedLang}
-                      onLangChange={setSelectedLang}
-                  />
-                </div>
-                <div>
-                  {showFeedbackPanel && (
-                      <FeedbackPanel 
-                          feedback={feedback} 
-                          onRestart={handleRestart} 
-                          isLoading={isFeedbackLoading}
-                      />
-                  )}
-                </div>
+                <ChatWindow
+                    scenario={currentScenario}
+                    messages={messages}
+                    onSendMessage={handleSendMessage}
+                    onEndSimulation={handleEndSimulation}
+                    isLoading={isLoading}
+                    isReadOnly={isChatReadOnly}
+                    selectedLang={selectedLang}
+                    onLangChange={setSelectedLang}
+                />
+                {showFeedbackPanel && (
+                    <FeedbackPanel 
+                        feedback={feedback} 
+                        onRestart={handleRestart} 
+                        isLoading={isFeedbackLoading}
+                    />
+                )}
               </div>
             </div>
           )}
