@@ -97,7 +97,7 @@ const App: React.FC = () => {
                   </button>
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-grow min-h-0">
-                <div className="min-h-0">
+                <div>
                   <ChatWindow
                       scenario={currentScenario}
                       messages={messages}
@@ -109,7 +109,7 @@ const App: React.FC = () => {
                       onLangChange={setSelectedLang}
                   />
                 </div>
-                <div className="min-h-0">
+                <div>
                   {showFeedbackPanel && (
                       <FeedbackPanel 
                           feedback={feedback} 
