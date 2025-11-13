@@ -35,8 +35,6 @@ const FEEDBACK_FALLBACKS: { [key: string]: Feedback } = {
 
 // This new function calls the Gemini API to get a dynamic initial greeting.
 export async function getInitialGreeting(scenario: Scenario, language: string): Promise<string> {
-  // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
-  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_key.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
   
@@ -80,7 +78,6 @@ The greeting MUST be in the language specified by this code: ${language}.
     if (error instanceof Error && error.message.includes("Requested entity was not found.")) {
         window.dispatchEvent(new Event('apiKeyInvalid'));
     }
-    // Fallback greeting in case of an error, localized.
     return GREETING_FALLBACKS[language] || GREETING_FALLBACKS['en-US'];
   }
 }
@@ -88,12 +85,13 @@ The greeting MUST be in the language specified by this code: ${language}.
 
 // This function calls the Gemini API to get a realistic gatekeeper response.
 export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[], language:string): Promise<{ text: string, connected: boolean }> {
-  // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
-  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_key.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
 
-  const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation. You are a top-tier professional.
+  // FIX: Instead of using `systemInstruction`, which proved to be unstable,
+  // we embed the instructions directly into the conversation history. This is a
+  // more robust method for guiding the AI's role-play behavior.
+  const rolePlayInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation. You are a top-tier professional.
 
 **Your Character & Context:**
 - Your Persona: "${scenario.gatekeeperPersona}". Embody this fully.
@@ -117,30 +115,32 @@ Your entire output must be a single, valid JSON object with two keys:
 - "connected": A boolean value. Set to true ONLY if you are connecting the user to the decision-maker. Otherwise, it must be false.
 `;
   
-  // FIX: The Gemini API requires conversations to start with a 'user' role.
-  // Our simulation realistically starts with a 'model' greeting. To ensure API
-  // compatibility, we remove this initial model greeting from the history sent
-  // to the API. The model's persona in the system prompt provides all the
-  // context it needs to respond appropriately.
   const historyForApi = history[0]?.role === 'model' ? history.slice(1) : history;
 
-  // Safeguard against sending an empty history, which would cause an API error.
   if (historyForApi.length === 0) {
     console.error("getGatekeeperResponse was called with a history that resulted in an empty list for the API.");
     return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
   }
 
-  const geminiHistory = historyForApi.map(msg => ({
-    role: msg.role,
-    parts: [{ text: msg.text }],
-  }));
+  // Prepend the instructions to the history for a more robust context.
+  const geminiHistory = [
+    { role: 'user', parts: [{ text: `Here are your instructions for the role-play:\n${rolePlayInstruction}` }] },
+    { role: 'model', parts: [{ text: 'Understood. I am ready to begin the role-play as the gatekeeper. I will provide my responses in the required JSON format.' }] }
+  ];
+
+  // Add the actual conversation history after the instructions
+  historyForApi.forEach(msg => {
+    geminiHistory.push({
+      role: msg.role,
+      parts: [{ text: msg.text }]
+    });
+  });
 
   try {
     const response = await ai.models.generateContent({
       model,
       contents: geminiHistory,
       config: {
-        systemInstruction: systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -169,8 +169,6 @@ Your entire output must be a single, valid JSON object with two keys:
 
 // This function calls the Gemini API to get dynamic, personalized feedback at the end.
 export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean, language: string): Promise<Feedback | null> {
-  // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
-  // FIX: Per coding guidelines, the API key must be obtained from process.env.API_key.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-pro';
   
