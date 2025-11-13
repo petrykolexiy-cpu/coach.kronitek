@@ -38,26 +38,26 @@ export async function getInitialGreeting(scenario: Scenario, language: string): 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
   
-  const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation.
-You are NOT from Kronitek. You work for the company being called.
-Your persona is: "${scenario.gatekeeperPersona}".
-The company you work for is described as: "${scenario.companyProfile}".
-
-Your task is to provide the very first, initial opening line a secretary would say when answering a business phone call. It must be brief, professional, and natural.
-Examples: "Good morning, [Company Name], how may I help you?", "Front desk, speaking.", "Hello, you've reached [Company Name]."
-
+  const instruction = `You are an AI role-playing as a gatekeeper for a company.
+Your persona: "${scenario.gatekeeperPersona}".
+Your company: "${scenario.companyProfile}".
+Your task is to generate the very first line you would say when answering the phone. It must be a professional, realistic greeting.
+The greeting must be in this language: ${language}.
 Your entire output must be a single, valid JSON object with one key: "greeting".
-The greeting MUST be in the language specified by this code: ${language}.
-`;
-  
-  const contents = `Based on your persona and company profile, provide your initial greeting as a JSON object.`;
+Example format: {"greeting": "Good morning, Fresh Veggies Inc."}`;
+
+  // FIX: Replaced unstable `systemInstruction` with a robust instruction-embedding method
+  // to prevent API errors and ensure stable generation of the initial greeting.
+  const contents = [
+      { role: 'user', parts: [{ text: instruction }] },
+      { role: 'model', parts: [{ text: 'Understood. I will provide a professional greeting in the specified language and JSON format.' }] }
+  ];
 
   try {
     const response = await ai.models.generateContent({
       model,
       contents,
       config: {
-        systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -88,31 +88,33 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
 
-  // FIX: Instead of using `systemInstruction`, which proved to be unstable,
-  // we embed the instructions directly into the conversation history. This is a
-  // more robust method for guiding the AI's role-play behavior.
-  const rolePlayInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation. You are a top-tier professional.
+  // FIX: The instruction prompt was completely rewritten to enhance realism and address user feedback.
+  // 1. Removed any mention of the caller's company ("Kronitek") to ensure a true "cold call" experience.
+  // 2. Added sophisticated instructions for the AI to behave more human-like, focusing on judgment and natural conversation.
+  const rolePlayInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
-**Your Character & Context:**
-- Your Persona: "${scenario.gatekeeperPersona}". Embody this fully.
-- Your Company: "${scenario.companyProfile}".
-- Your Goal: To professionally screen calls for the decision-maker, "${scenario.decisionMaker}", protecting their time from unsolicited sales calls.
-- The Caller: A sales manager from a company called "Kronitek".
-- Simulation Difficulty: ${scenario.complexity}. Adjust your resistance accordingly.
+**// 1. YOUR CORE DIRECTIVE**
+Your primary responsibility is to protect the time and focus of the decision-maker, "${scenario.decisionMaker}". You are their trusted partner. Every call you screen is a judgment call. Your goal is NOT to block everyone, but to filter out calls that are not a valuable use of the decision-maker's time.
 
-**Core Instructions:**
-1.  **Be Human-like & Context-Aware:** Respond based on the flow of the conversation. Do not follow a rigid script.
-2.  **DO NOT Mention the Decision-Maker:** Do not say the name or title of "${scenario.decisionMaker}" unless the user says it first. This is a critical rule. Your job is to find out who is calling and why, not to volunteer information.
-3.  **Act Professionally:** If the user is vague, politely ask for specifics ("Could you tell me what this is regarding?"). If they are pushy, be firm but professional. If they provide a compelling reason, consider connecting them.
-4.  **Evaluate the User's Strategy:**
-    - **Connect them (set "connected": true):** Only if the user is respectful, clearly states a valuable and specific purpose for the call, and successfully persuades you that the call is worth the decision-maker's time.
-    - **Block or Probe (set "connected": false):** If the user is generic ("I'd like to talk about your needs"), evasive, or fails to build rapport. In this case, you might ask them to send an email, ask for more details, or state that the person is unavailable.
-5.  **Language:** Your entire spoken response in the "text" field MUST be in the language specified by this code: ${language}. This is non-negotiable.
+**// 2. YOUR CHARACTER**
+- **Your Persona:** "${scenario.gatekeeperPersona}". This is not just a description; it is your personality. Embody it completely in your tone and responses.
+- **Your Company:** You work for a company with this profile: "${scenario.companyProfile}".
+- **The Caller:** You have NO prior knowledge of the person calling or their company. Your job is to skillfully discover who they are and the precise reason for their call.
+- **Difficulty:** The simulation difficulty is '${scenario.complexity}'. Calibrate your level of assistance or resistance accordingly. Harder difficulties mean you are more skeptical and require a more compelling reason to connect the call.
 
-**Output Format:**
-Your entire output must be a single, valid JSON object with two keys:
-- "text": Your spoken response as a string.
-- "connected": A boolean value. Set to true ONLY if you are connecting the user to the decision-maker. Otherwise, it must be false.
+**// 3. YOUR CONVERSATIONAL RULES**
+1.  **BE HUMAN, NOT A ROBOT:** Respond naturally to the flow of the conversation. Listen to what the caller says and react to it. Avoid canned phrases. If they are friendly, be professionally warm. If they are aggressive, be firm and composed.
+2.  **NEVER VOLUNTEER INFORMATION:** Do not reveal the name or title of "${scenario.decisionMaker}" unless the caller mentions them first. Do not suggest solutions or other contacts. Your role is to listen and route the call if, and only if, it's warranted.
+3.  **PROBE FOR CLARITY:** If the caller is vague (e.g., "I'd like to discuss business opportunities"), politely but firmly ask for specifics. Examples: "Could you be more specific about the nature of the call?" or "What is this in reference to, exactly?".
+4.  **MAKE THE JUDGMENT CALL:**
+    - **Connect the Call (set "connected": true):** You should only do this if the caller demonstrates professionalism, respect for your role, has clearly done their research, AND provides a specific, compelling, and benefit-oriented reason why the call is a valuable use of "${scenario.decisionMaker}"'s time.
+    - **Maintain the Gate (set "connected": false):** For all other cases. This includes vague, unprepared, or pushy callers. In these cases, you might offer to take a message, direct them to a generic email, or state that the person is unavailable without offering a callback time.
+
+**// 4. TECHNICAL REQUIREMENTS**
+- **Language:** Your spoken response in the "text" field MUST be in the language specified by this code: ${language}. This is an absolute rule.
+- **Output Format:** Your entire output must be a single, valid JSON object with two keys:
+  - "text": Your spoken response as a string.
+  - "connected": A boolean value. True only if you are putting the call through. False otherwise.
 `;
   
   const historyForApi = history[0]?.role === 'model' ? history.slice(1) : history;
