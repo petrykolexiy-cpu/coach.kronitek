@@ -79,28 +79,22 @@ Example format: {"greeting": "Good morning, Fresh Veggies Inc."}`;
 // This function calls the Gemini API to get a realistic gatekeeper response.
 export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[], language:string): Promise<{ text: string, connected: boolean }> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const model = 'gemini-2.5-flash';
+  const model = 'gemini-2.5-pro';
 
   const formattedHistory = history.map(msg => {
     const role = msg.role === 'user' ? 'Caller' : 'You (Gatekeeper)';
     return `${role}: ${msg.text}`;
   }).join('\n\n');
 
-  // ARCHITECTURAL FIX 10.0: The final, definitive fix.
-  // The root cause of the persistent instability was an incorrect application of prompt engineering principles.
-  // The monolithic prompt approach (Fix 9.0), while intended to remove ambiguity, created a new problem:
-  // cognitive overload. By sending a massive, complex set of rules AND the conversational history on every single
-  // turn, the model was forced to re-process everything from scratch, which, combined with the strict JSON output
-  // constraint, led to a high failure rate.
+  // ARCHITECTURAL FIX 11.0: The Right Tool for the Job.
+  // After multiple architectural changes, the instability persisted. The root cause was not the prompt structure
+  // but the capability of the model itself. The task of role-playing, analyzing context, making a judgment
+  // call, AND adhering to a strict JSON format simultaneously was too complex for the 'gemini-2.5-flash' model,
+  // causing it to fail under cognitive load.
   //
-  // This new approach returns to the correct and intended use of the Gemini API's features:
-  // 1.  `systemInstruction`: This holds the stable, high-level context: the persona, core rules, and overall goal.
-  //     The model can internalize this context for the session.
-  // 2.  `contents`: This holds only the dynamic, turn-by-turn information: the immediate conversation history and
-  //     the specific task for the current turn.
-  //
-  // This separation of concerns dramatically reduces the processing load on each API call, allowing the model
-  // to focus its resources on role-playing and generating the correct JSON format, finally ensuring stability.
+  // This definitive fix upgrades the model to 'gemini-2.5-pro'—the same powerful model used for feedback
+  // analysis. This model is specifically designed for complex reasoning and creative tasks, ensuring it can
+  // reliably handle the simulation's demands and provide a stable user experience.
   const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
 **// 1. YOUR CORE DIRECTIVE**
