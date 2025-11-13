@@ -107,23 +107,32 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   - "connected": A boolean value. True only if you are putting the call through. False otherwise.
 `;
   
-  // DEFINITIVE FIX: The Gemini API has a strict rule that conversation histories must start with a 'user' role.
-  // Our simulation starts with a 'model' role (the secretary), which caused the persistent error.
-  // This new logic solves the problem by prepending a neutral 'user' message to the history.
-  // This makes the entire conversation history valid for the API, finally resolving the bug.
+  // ARCHITECTURAL FIX: The Gemini API requires that conversation histories MUST start with a 'user' role and alternate perfectly.
+  // Our simulation starts with a 'model' turn (the greeting), which violates this rule.
+  // This new logic creates a valid history by constructing a synthetic first 'user' turn that contains all instructions
+  // AND embeds the initial greeting. This is followed by a synthetic 'model' acknowledgement.
+  // The rest of the real conversation can then be appended, creating a perfectly valid sequence for the API and fixing the error.
+
+  const instructionAndFirstGreeting = `${rolePlayInstruction}
+
+Okay, I understand the rules and my persona. I will now begin the role-play.
+My very first line, answering the phone, is: "${history[0].text}"
+Now, I will wait for the user's response.`;
+
+  // The rest of the history, which starts with the user's first message.
+  const subsequentHistory = history.length > 1 ? history.slice(1) : [];
+
   const contents = [
-      { role: 'user', parts: [{ text: "Let's begin the role-play." }] },
-      ...history.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }))
+      { role: 'user' as const, parts: [{ text: instructionAndFirstGreeting }] },
+      { role: 'model' as const, parts: [{ text: "Understood. I am ready to begin the role-play. It is now the sales manager's turn to speak." }] },
+      ...subsequentHistory.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }))
   ];
 
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: contents,
+      contents: contents, // Use the newly constructed valid history
       config: {
-        // The role-play instructions are now provided as a stable system instruction,
-        // which is the correct way to give an AI its persona for a conversation.
-        systemInstruction: rolePlayInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -136,7 +145,12 @@ Your primary responsibility is to protect the time and focus of the decision-mak
       },
     });
 
-    const jsonString = response.text;
+    // Defensive parsing: The model can sometimes wrap the JSON in markdown.
+    let jsonString = response.text.trim();
+    if (jsonString.startsWith('```json')) {
+      jsonString = jsonString.replace(/^```json\s*|```$/g, '');
+    }
+    
     const responseObject = JSON.parse(jsonString);
     return responseObject;
 
