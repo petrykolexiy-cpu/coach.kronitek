@@ -108,31 +108,25 @@ Your primary responsibility is to protect the time and focus of the decision-mak
 `;
   
   let apiHistory = history.map(msg => ({ role: msg.role as 'user' | 'model', parts: [{ text: msg.text }] }));
-  let modifiedSystemInstruction = systemInstruction;
-
-  // ARCHITECTURAL FIX 4.1: The definitive fix for the conversation history.
-  // The previous fix had a logical flaw in the prompt, telling the AI a transcript
-  // would follow in the instructions, which was inaccurate. This created a contradiction
-  // causing the model to error out.
-  // This version corrects the instruction to be precise and truthful, eliminating the error.
+  
+  // ARCHITECTURAL FIX 5.0: The definitive, standards-compliant fix.
+  // Previous attempts to modify the systemInstruction with conversational context were
+  // causing unpredictable model failures. The root cause is that the API requires
+  // the 'contents' array to have strictly alternating user/model roles, starting with 'user'.
+  // This fix ensures compliance by programmatically prepending a synthetic, non-visible
+  // user message to the start of the history ONLY when the simulation starts with the
+  // gatekeeper's greeting. This creates a valid `[user, model, user, ...]` sequence
+  // without altering the static system instructions, which is a more robust pattern.
   if (apiHistory.length > 0 && apiHistory[0].role === 'model') {
-    const greetingText = apiHistory[0].parts[0].text;
-    
-    const contextHeader = `
-**// 5. CONVERSATION CONTEXT**
-The simulation has started. Your opening line was: "${greetingText}"
-The user has now replied. Your task is to generate your next response based on their message, following all the rules above.`;
-    
-    modifiedSystemInstruction = `${systemInstruction}\n${contextHeader}`;
-    
-    // The rest of the history is now a valid `contents` array because it starts with the user's first message.
-    apiHistory = apiHistory.slice(1);
+    const syntheticUserMessage = { role: 'user' as const, parts: [{ text: 'Begin the simulation.' }] };
+    apiHistory = [syntheticUserMessage, ...apiHistory];
   }
 
-  // A robust check: if for some reason the history is now empty (e.g., only contained the greeting),
+
+  // A robust check: if for some reason the history is empty,
   // we can't send an empty `contents` array to the API.
   if (apiHistory.length === 0) {
-      console.warn("getGatekeeperResponse was called with a history that only contained the initial greeting. Returning fallback.");
+      console.warn("getGatekeeperResponse was called with an empty history. Returning fallback.");
       return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
   }
   
@@ -141,7 +135,7 @@ The user has now replied. Your task is to generate your next response based on t
       model,
       contents: apiHistory,
       config: {
-        systemInstruction: modifiedSystemInstruction,
+        systemInstruction: systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
