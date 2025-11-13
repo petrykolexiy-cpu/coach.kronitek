@@ -107,33 +107,37 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   - "connected": A boolean value. True only if you are putting the call through. False otherwise.
 `;
   
-  let apiHistory = history.map(msg => ({ role: msg.role as 'user' | 'model', parts: [{ text: msg.text }] }));
+  // ARCHITECTURAL FIX 8.0: The definitive, robust fix.
+  // The root cause of all instability was forcing the API's multi-turn chat model (`contents` array)
+  // to handle a scenario it's not designed for (a conversation starting with the 'model' role).
+  // All previous attempts were "hacks" to make the history array structurally valid, but they
+  // created logical confusion for the AI, causing it to fail, especially on longer conversations.
+  //
+  // This new approach abandons the chat history model entirely for this function. Instead, it
+  // formats the entire conversation history into a single string (a transcript). This string is
+  // then passed as a simple, one-shot prompt. This completely sidesteps the role-alternation
+  // problem and provides a clean, unambiguous context to the AI on every turn. This is a far
+  // more robust and reliable method for this specific use case.
   
-  // ARCHITECTURAL FIX 7.0: The definitive, context-preserving fix.
-  // The core problem is a mismatch: this simulation requires the AI ('model') to speak first,
-  // but the Gemini API's multi-turn chat history requires roles to alternate, starting with 'user'.
-  // Previous attempts to slice the history (`apiHistory.slice(1)`) made the API call valid but
-  // critically removed the context of the AI's opening line, which likely caused model confusion
-  // and instability in later turns.
-  // This new approach solves the problem without losing context. It prepends a synthetic,
-  // non-conversational 'user' turn. This satisfies the API's structural requirement while
-  // ensuring the model sees the entire, unaltered conversation, including its own first words,
-  // leading to more stable and coherent responses.
-  if (apiHistory.length > 0 && apiHistory[0].role === 'model') {
-    apiHistory.unshift({ role: 'user', parts: [{ text: '(The user has initiated the call, and you have answered.)' }] });
-  }
+  const formattedHistory = history.map(msg => {
+    const role = msg.role === 'user' ? 'Caller' : 'You (Gatekeeper)';
+    return `${role}: ${msg.text}`;
+  }).join('\n\n');
 
-  // A robust check: if for some reason the history is now empty (which shouldn't happen in a normal flow),
-  // we can't send an empty `contents` array to the API.
-  if (apiHistory.length === 0) {
-      console.warn("getGatekeeperResponse was called with a history that became empty. Returning fallback.");
-      return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
-  }
-  
+  const userPrompt = `
+Based on your persona and the conversation history below, generate your next response.
+
+**Conversation History:**
+${formattedHistory}
+
+**Your Task:**
+Provide the very next thing you would say as the gatekeeper.
+`;
+
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: apiHistory,
+      contents: userPrompt, // Use the single, formatted prompt instead of a history array
       config: {
         systemInstruction: systemInstruction,
         responseMimeType: "application/json",
