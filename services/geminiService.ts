@@ -86,19 +86,17 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
     return `${role}: ${msg.text}`;
   }).join('\n\n');
 
-  // ARCHITECTURAL FIX 13.0: Correct Use of System Instruction for Conversational Stability.
-  // The previous "monolithic prompt" approach was fundamentally inefficient for a turn-by-turn
-  // conversation. It forced the model to re-process the entire set of complex rules with every single message,
-  // leading to cognitive overload and intermittent failures, especially with non-English languages.
+  // ARCHITECTURAL FIX 14.0: Monolithic Prompt for Maximum Reliability.
+  // The `systemInstruction` approach, while architecturally "pure", proved to be unstable for this
+  // complex, multi-lingual, JSON-constrained task. The root cause of the persistent failures was the
+  // cognitive load on the model from having to reconcile a separate, complex system prompt with the
+  // ongoing conversation and strict output format.
   //
-  // This definitive fix implements the architecturally correct pattern:
-  // 1. `systemInstruction`: Contains all static information—the persona, rules, and JSON output format.
-  //    The model internalizes this once as its "operating system" for the simulation.
-  // 2. `contents` (userPrompt): Contains only the dynamic conversation history.
-  //
-  // This separation of concerns is how the API is designed for robust conversations. It dramatically
-  // reduces the processing load per turn, allowing the model to focus on its immediate task and ensuring stability.
-  const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
+  // This definitive fix reverts to a simpler, more robust monolithic prompt strategy. All context, rules,
+  // history, and instructions are provided in a single `contents` payload. This gives the model one
+  // clear, unambiguous, self-contained task, eliminating the context-switching that led to instability.
+  // Reliability is prioritized over architectural purity.
+  const monolithicPrompt = `You are a world-class AI, expertly role-playing a corporate gatekeeper for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
 **//-- SCENARIO CONTEXT --//**
 - **Your Persona:** "${scenario.gatekeeperPersona}"
@@ -114,7 +112,12 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
     - **Connect the Call (set "connected": true):** Only if the caller provides a specific, compelling, benefit-oriented reason for the call.
     - **Maintain the Gate (set "connected": false):** For all other cases.
 
-**//-- OUTPUT FORMAT --//**
+**//-- CONVERSATION HISTORY --//**
+This is the conversation so far. Your turn is next.
+${formattedHistory}
+
+**//-- YOUR TASK --//**
+Based on all the rules and the conversation history, provide your next response.
 - Your **ENTIRE** output must be a single, valid JSON object.
 - The JSON must have EXACTLY two keys: "text" (your spoken response) and "connected" (a boolean).
 - All text in the "text" field must be in this language: **${language}**.
@@ -124,19 +127,12 @@ Example of a valid output (remember to use the requested language for the "text"
   "text": "He is currently unavailable. May I ask what this is regarding?",
   "connected": false
 }`;
-
-  const userPrompt = `Here is the conversation history so far. Your turn is next.
-
-${formattedHistory}
-
-Based on all the rules provided, provide your next response in the specified JSON format.`;
   
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: userPrompt, 
+      contents: monolithicPrompt, 
       config: {
-        systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -177,21 +173,12 @@ export async function getPerformanceFeedback(scenario: Scenario, history: ChatMe
   const formattedHistory = history.map(msg => `${msg.role === 'user' ? 'Sales Manager' : 'Gatekeeper'}: ${msg.text}`).join('\n');
   const outcome = success ? "The user successfully reached the decision-maker." : "The user did not reach the decision-maker.";
 
-  const systemInstruction = `You are an expert AI sales coach. Your task is to analyze a sales manager's performance in a role-play simulation where they tried to get past a gatekeeper.
+  // Using a monolithic prompt for maximum reliability, consistent with getGatekeeperResponse.
+  const monolithicPrompt = `You are an expert AI sales coach. Your task is to analyze a sales manager's performance in a role-play simulation where they tried to get past a gatekeeper.
 You will be given the scenario details, the full conversation transcript, and the final outcome.
 Your analysis must be objective, constructive, and actionable.
 
-Provide your feedback as a single, valid JSON object with the following structure:
-- "strengths": An array of 2-3 strings highlighting what the user did well.
-- "improvements": An array of 2-3 strings with specific suggestions for what to do better next time.
-- "summary": A concise paragraph (2-3 sentences) summarizing the overall performance and key takeaway.
-- "overallScore": A single integer between 1 and 10, where 1 is very poor and 10 is perfect. Base this score on the user's strategy, language, persistence, and the final outcome relative to the scenario's difficulty.
-
-**VERY IMPORTANT:** All text fields in your JSON response MUST be in the language specified by this code: ${language}.
-`;
-
-  const userPrompt = `
-**Analysis Request**
+**//-- ANALYSIS REQUEST --//**
 
 **Scenario:**
 - Title: ${scenario.title}
@@ -204,15 +191,21 @@ ${formattedHistory}
 
 **Final Outcome:** ${outcome}
 
-Please provide your detailed feedback in the specified JSON format.
+**//-- OUTPUT FORMAT --//**
+Provide your feedback as a single, valid JSON object with the following structure:
+- "strengths": An array of 2-3 strings highlighting what the user did well.
+- "improvements": An array of 2-3 strings with specific suggestions for what to do better next time.
+- "summary": A concise paragraph (2-3 sentences) summarizing the overall performance and key takeaway.
+- "overallScore": A single integer between 1 and 10, where 1 is very poor and 10 is perfect. Base this score on the user's strategy, language, persistence, and the final outcome relative to the scenario's difficulty.
+
+**VERY IMPORTANT:** All text fields in your JSON response MUST be in the language specified by this code: ${language}.
 `;
 
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: userPrompt,
+      contents: monolithicPrompt,
       config: {
-        systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
