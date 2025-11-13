@@ -109,24 +109,21 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   
   let apiHistory = history.map(msg => ({ role: msg.role as 'user' | 'model', parts: [{ text: msg.text }] }));
   
-  // ARCHITECTURAL FIX 5.0: The definitive, standards-compliant fix.
-  // Previous attempts to modify the systemInstruction with conversational context were
-  // causing unpredictable model failures. The root cause is that the API requires
-  // the 'contents' array to have strictly alternating user/model roles, starting with 'user'.
-  // This fix ensures compliance by programmatically prepending a synthetic, non-visible
-  // user message to the start of the history ONLY when the simulation starts with the
-  // gatekeeper's greeting. This creates a valid `[user, model, user, ...]` sequence
-  // without altering the static system instructions, which is a more robust pattern.
+  // ARCHITECTURAL FIX 6.0: The definitive fix.
+  // Previous attempts to prepend a synthetic "user" message to satisfy the API's
+  // alternating role requirement were technically correct but created an unnatural
+  // conversation flow that likely confused the model, causing it to fail.
+  // This new, simpler approach removes the AI's initial greeting from the history instead.
+  // This ensures the history always starts with the actual user's first message,
+  // creating a valid and natural conversation flow for the AI to process.
   if (apiHistory.length > 0 && apiHistory[0].role === 'model') {
-    const syntheticUserMessage = { role: 'user' as const, parts: [{ text: 'Begin the simulation.' }] };
-    apiHistory = [syntheticUserMessage, ...apiHistory];
+    apiHistory = apiHistory.slice(1);
   }
 
-
-  // A robust check: if for some reason the history is empty,
+  // A robust check: if for some reason the history is now empty (which shouldn't happen in a normal flow),
   // we can't send an empty `contents` array to the API.
   if (apiHistory.length === 0) {
-      console.warn("getGatekeeperResponse was called with an empty history. Returning fallback.");
+      console.warn("getGatekeeperResponse was called with a history that became empty. Returning fallback.");
       return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
   }
   
