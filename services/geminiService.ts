@@ -13,12 +13,11 @@ Your persona is: "${scenario.gatekeeperPersona}".
 The company you work for is described as: "${scenario.companyProfile}".
 The user is a sales manager from a company called Kronitek, who is about to start a conversation with you.
 
-Your task is to provide the initial opening line a secretary would say when answering the phone. It should be brief and natural.
-Your entire output must be a single, valid JSON object with one key: "greeting".
-The response in the "greeting" field MUST be in the language specified by this code: ${language}.
+Your task is to provide ONLY the initial opening line a secretary would say when answering the phone. It should be brief, natural, and not include any other text, labels, or quotation marks.
+The response MUST be in the language specified by this code: ${language}.
 `;
   
-  const contents = `Based on your persona and company profile, provide your initial greeting as a JSON object.`;
+  const contents = `Provide your initial greeting.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -26,25 +25,24 @@ The response in the "greeting" field MUST be in the language specified by this c
       contents,
       config: {
         systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            greeting: { type: Type.STRING },
-          },
-          required: ['greeting'],
-        },
       },
     });
 
-    const jsonString = response.text;
-    const responseObject = JSON.parse(jsonString);
-    return responseObject.greeting;
+    return response.text.trim();
 
   } catch (error) {
     console.error("Error calling Gemini API for initial greeting:", error);
     // Fallback greeting in case of an error
-    return "Hello, this is the front desk. How can I help you?";
+    const fallbackGreetings: { [key: string]: string } = {
+        'en-US': "Hello, this is the front desk. How can I help you?",
+        'ru-RU': "Здравствуйте, приемная. Чем могу помочь?",
+        'uk-UA': "Доброго дня, приймальня. Чим можу допомогти?",
+        'de-DE': "Hallo, hier ist der Empfang. Wie kann ich Ihnen helfen?",
+        'es-ES': "Hola, esta es la recepción. ¿En qué puedo ayudarle?",
+        'fr-FR': "Bonjour, ici l'accueil. Comment puis-je vous aider?",
+        'fil-PH': "Hello, ito ang front desk. Paano ako makakatulong sa iyo?",
+    };
+    return fallbackGreetings[language] || fallbackGreetings['en-US'];
   }
 }
 
@@ -65,17 +63,19 @@ The company you work for is described as: "${scenario.companyProfile}".
 The simulation difficulty is: ${scenario.complexity}.
 
 Your task is to respond naturally based on your persona and the conversation history.
-If the user's last message is persuasive, specific, and gives a strong reason to connect them, you should connect them.
-If it's vague, generic, or weak, you should politely probe for more information, deflect, or ask them to send an email, just like a real gatekeeper would.
-Do not break character. Your response should be just what the gatekeeper would say.
+Your response should be just what the gatekeeper would say.
+The response MUST be in the language specified by this code: ${language}.
 
-Your entire output must be a single, valid JSON object with two keys:
-- "text": Your spoken response as a string.
-- "connected": A boolean value. Set to true ONLY if you are connecting the user, otherwise false.
-The response in the "text" field MUST be in the language specified by this code: ${language}.
+CRITICAL INSTRUCTION:
+- If you decide to connect the user to the decision-maker, your response MUST start with the exact phrase "[CONNECT]".
+- If the user is persuasive enough, you should connect them.
+- Otherwise, your response should NOT contain that phrase.
+
+Example of connecting: "[CONNECT] One moment, I'll put you through to Mr. Petrovich."
+Example of not connecting: "May I ask what this is regarding?"
 `;
   
-  const contents = `Here is the conversation history so far:\n${formattedHistory}\n\nBased on this history, and especially the last user message, provide your JSON response.`;
+  const contents = `Here is the conversation history so far:\n${formattedHistory}\n\nBased on this history, and especially the last user message, provide your response. Follow the CRITICAL INSTRUCTION about using '[CONNECT]'.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -83,21 +83,28 @@ The response in the "text" field MUST be in the language specified by this code:
       contents: contents,
       config: {
         systemInstruction: systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            text: { type: Type.STRING },
-            connected: { type: Type.BOOLEAN },
-          },
-          required: ['text', 'connected'],
-        },
       },
     });
 
-    const jsonString = response.text;
-    const responseObject = JSON.parse(jsonString);
-    return responseObject;
+    const responseText = response.text.trim();
+    const isConnected = responseText.startsWith('[CONNECT]');
+    const cleanText = isConnected ? responseText.replace('[CONNECT]', '').trim() : responseText;
+
+    // Handle cases where the model might only return [CONNECT]
+    if (cleanText.length === 0 && isConnected) {
+        const connectMessage: { [key: string]: string } = {
+            'en-US': "One moment, I'm connecting you.",
+            'ru-RU': "Минуточку, соединяю.",
+            'uk-UA': "Хвилинку, з'єдную.",
+            'de-DE': "Einen Moment, ich verbinde Sie.",
+            'es-ES': "Un momento, le pongo en contacto.",
+            'fr-FR': "Un instant, je vous mets en communication.",
+            'fil-PH': "Sandali lang, ikinokonekta na kita.",
+        };
+        return { text: connectMessage[language] || connectMessage['en-US'], connected: true };
+    }
+    
+    return { text: cleanText, connected: isConnected };
 
   } catch (error) {
     console.error("Error calling Gemini API for gatekeeper response:", error);
