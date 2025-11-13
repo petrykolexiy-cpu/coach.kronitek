@@ -13,6 +13,13 @@ const ArrowRightIcon = () => (
     </svg>
 );
 
+const complexityStyles: { [key in Scenario['complexity']]: string } = {
+  easy: 'bg-green-500/20 text-green-400 border-green-500/30',
+  medium: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+  hard: 'bg-red-500/20 text-red-400 border-red-500/30',
+};
+
+
 export const ScenarioSelector: React.FC<ScenarioSelectorProps> = ({ onSelectScenario }) => {
   return (
     <div className="container mx-auto p-4 md:p-8">
@@ -26,7 +33,12 @@ export const ScenarioSelector: React.FC<ScenarioSelectorProps> = ({ onSelectScen
             onClick={() => onSelectScenario(scenario)}
           >
             <div>
-                <h3 className="text-xl font-semibold mb-2 text-blue-400">{scenario.title}</h3>
+                <div className="flex justify-between items-start mb-2 gap-2">
+                    <h3 className="text-xl font-semibold text-blue-400">{scenario.title}</h3>
+                    <span className={`flex-shrink-0 px-2 py-0.5 text-xs font-semibold rounded-full border ${complexityStyles[scenario.complexity]}`}>
+                        {scenario.complexity.toUpperCase()}
+                    </span>
+                </div>
                 <p className="text-slate-300 mb-4">{scenario.description}</p>
             </div>
             <div className="flex justify-end items-center mt-4">

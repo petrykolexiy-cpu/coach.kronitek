@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
-// Fix: Define a global `AIStudio` interface and use it for `window.aistudio`
-// to ensure type compatibility across different files that might augment the global Window type.
-// This resolves the "Subsequent property declarations must have the same type" error.
+// Fix: Resolved a TypeScript error related to global type declarations for `window.aistudio`.
+// The inline object type was replaced with a named `AIStudio` interface to ensure consistency.
 declare global {
   interface AIStudio {
     hasSelectedApiKey: () => Promise<boolean>;
     openSelectKey: () => Promise<void>;
   }
   interface Window {
-    aistudio: AIStudio;
+    // FIX: Made `aistudio` optional to match runtime checks and resolve potential declaration conflicts.
+    aistudio?: AIStudio;
   }
 }
 
@@ -20,6 +20,11 @@ interface ApiKeyPromptProps {
 export const ApiKeyPrompt: React.FC<ApiKeyPromptProps> = ({ children }) => {
   const [isKeySelected, setIsKeySelected] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
+
+  const handleApiKeyInvalid = useCallback(() => {
+    console.warn("API key is invalid. Prompting user to select a new one.");
+    setIsKeySelected(false);
+  }, []);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -39,7 +44,13 @@ export const ApiKeyPrompt: React.FC<ApiKeyPromptProps> = ({ children }) => {
     };
 
     checkKey();
-  }, []);
+
+    window.addEventListener('apiKeyInvalid', handleApiKeyInvalid);
+
+    return () => {
+        window.removeEventListener('apiKeyInvalid', handleApiKeyInvalid);
+    };
+  }, [handleApiKeyInvalid]);
 
   const handleSelectKey = async () => {
     if (window.aistudio) {
