@@ -110,19 +110,18 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   let apiHistory = history.map(msg => ({ role: msg.role as 'user' | 'model', parts: [{ text: msg.text }] }));
   let modifiedSystemInstruction = systemInstruction;
 
-  // ARCHITECTURAL FIX 4.0: This is the definitive fix for the conversation history.
-  // The Gemini API requires that the `contents` array starts with a 'user' role.
-  // Our simulation starts with a 'model' role (the greeting), violating this rule.
-  // This logic resolves the issue by extracting the initial model greeting,
-  // passing the now-valid rest of the history to `contents`, and injecting the greeting
-  // into the `systemInstruction` as context. This is the cleanest, most robust solution.
+  // ARCHITECTURAL FIX 4.1: The definitive fix for the conversation history.
+  // The previous fix had a logical flaw in the prompt, telling the AI a transcript
+  // would follow in the instructions, which was inaccurate. This created a contradiction
+  // causing the model to error out.
+  // This version corrects the instruction to be precise and truthful, eliminating the error.
   if (apiHistory.length > 0 && apiHistory[0].role === 'model') {
     const greetingText = apiHistory[0].parts[0].text;
     
     const contextHeader = `
 **// 5. CONVERSATION CONTEXT**
-The conversation has already begun. Your first line (the greeting) was: "${greetingText}"
-The following is the rest of the conversation transcript. You must now provide your next response based on the last thing the user said.`;
+The simulation has started. Your opening line was: "${greetingText}"
+The user has now replied. Your task is to generate your next response based on their message, following all the rules above.`;
     
     modifiedSystemInstruction = `${systemInstruction}\n${contextHeader}`;
     
