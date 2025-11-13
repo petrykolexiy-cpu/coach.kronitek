@@ -117,9 +117,20 @@ Your entire output must be a single, valid JSON object with two keys:
 - "connected": A boolean value. Set to true ONLY if you are connecting the user to the decision-maker. Otherwise, it must be false.
 `;
   
-  // FIX: Pass conversation history as a structured object instead of a single string
-  // This improves model reliability, especially for non-English conversations.
-  const geminiHistory = history.map(msg => ({
+  // FIX: The Gemini API requires conversations to start with a 'user' role.
+  // Our simulation realistically starts with a 'model' greeting. To ensure API
+  // compatibility, we remove this initial model greeting from the history sent
+  // to the API. The model's persona in the system prompt provides all the
+  // context it needs to respond appropriately.
+  const historyForApi = history[0]?.role === 'model' ? history.slice(1) : history;
+
+  // Safeguard against sending an empty history, which would cause an API error.
+  if (historyForApi.length === 0) {
+    console.error("getGatekeeperResponse was called with a history that resulted in an empty list for the API.");
+    return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
+  }
+
+  const geminiHistory = historyForApi.map(msg => ({
     role: msg.role,
     parts: [{ text: msg.text }],
   }));
