@@ -81,7 +81,7 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
 
-  const rolePlayInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
+  const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper (secretary, executive assistant) for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
 **// 1. YOUR CORE DIRECTIVE**
 Your primary responsibility is to protect the time and focus of the decision-maker, "${scenario.decisionMaker}". You are their trusted partner. Every call you screen is a judgment call. Your goal is NOT to block everyone, but to filter out calls that are not a valuable use of the decision-maker's time.
@@ -107,32 +107,23 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   - "connected": A boolean value. True only if you are putting the call through. False otherwise.
 `;
   
-  // ARCHITECTURAL FIX: The Gemini API requires that conversation histories MUST start with a 'user' role and alternate perfectly.
-  // Our simulation starts with a 'model' turn (the greeting), which violates this rule.
-  // This new logic creates a valid history by constructing a synthetic first 'user' turn that contains all instructions
-  // AND embeds the initial greeting. This is followed by a synthetic 'model' acknowledgement.
-  // The rest of the real conversation can then be appended, creating a perfectly valid sequence for the API and fixing the error.
-
-  const instructionAndFirstGreeting = `${rolePlayInstruction}
-
-Okay, I understand the rules and my persona. I will now begin the role-play.
-My very first line, answering the phone, is: "${history[0].text}"
-Now, I will wait for the user's response.`;
-
-  // The rest of the history, which starts with the user's first message.
-  const subsequentHistory = history.length > 1 ? history.slice(1) : [];
-
+  // ARCHITECTURAL FIX 2.0: The entire prompt now lives in `systemInstruction`.
+  // To satisfy the API's 'user-first' rule for the `contents` history, we prepend a single,
+  // neutral, context-setting message as the 'user'. The actual conversation history then follows.
+  // This is much cleaner and more aligned with the API's design.
   const contents = [
-      { role: 'user' as const, parts: [{ text: instructionAndFirstGreeting }] },
-      { role: 'model' as const, parts: [{ text: "Understood. I am ready to begin the role-play. It is now the sales manager's turn to speak." }] },
-      ...subsequentHistory.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }))
+      { role: 'user' as const, parts: [{ text: "Let's begin the role-play. I am the sales manager. You are the gatekeeper. You will speak first." }] },
+      ...history.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }))
   ];
 
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: contents, // Use the newly constructed valid history
+      // The conversation history now correctly starts with 'user' and alternates.
+      contents: contents,
       config: {
+        // The detailed instructions are provided here, separately from the conversation.
+        systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
