@@ -1,6 +1,38 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Scenario, ChatMessage, Feedback } from '../types';
 
+// Fallback messages translated for a better user experience
+const GREETING_FALLBACKS: { [key: string]: string } = {
+    'en-US': "Hello, this is the front desk. How can I help you?",
+    'ru-RU': "Здравствуйте, это приемная. Чем могу помочь?",
+    'uk-UA': "Доброго дня, це приймальня. Чим можу допомогти?",
+    'de-DE': "Hallo, hier ist der Empfang. Wie kann ich Ihnen helfen?",
+    'es-ES': "Hola, habla la recepción. ¿En qué puedo ayudarle?",
+    'fr-FR': "Bonjour, c'est la réception. Comment puis-je vous aider?",
+    'fil-PH': "Hello, ito po ang front desk. Ano po ang maitutulong ko sa inyo?",
+};
+
+const RESPONSE_FALLBACKS: { [key: string]: { text: string, connected: boolean } } = {
+    'en-US': { text: "I'm sorry, we seem to be experiencing some technical difficulties. Could you please call back in a few minutes?", connected: false },
+    'ru-RU': { text: "Извините, у нас возникли технические неполадки. Не могли бы вы перезвонить через несколько минут?", connected: false },
+    'uk-UA': { text: "Вибачте, у нас виникли технічні труднощі. Чи не могли б ви передзвонити за кілька хвилин?", connected: false },
+    'de-DE': { text: "Entschuldigung, wir haben anscheinend technische Schwierigkeiten. Könnten Sie bitte in ein paar Minuten zurückrufen?", connected: false },
+    'es-ES': { text: "Lo siento, parece que estamos experimentando algunas dificultades técnicas. ¿Podría volver a llamar en unos minutos?", connected: false },
+    'fr-FR': { text: "Je suis désolé, nous semblons rencontrer des difficultés techniques. Pourriez-vous rappeler dans quelques minutes?", connected: false },
+    'fil-PH': { text: "Paumanhin, mukhang nakakaranas kami ng ilang teknikal na problema. Pwede po bang tumawag ulit kayo sa loob ng ilang minuto?", connected: false },
+};
+
+const FEEDBACK_FALLBACKS: { [key: string]: Feedback } = {
+    'en-US': { strengths: ["You participated in the simulation."], improvements: ["The AI coach was unable to generate feedback due to a technical error. Please try again."], summary: "An error occurred while generating feedback.", overallScore: 0 },
+    'ru-RU': { strengths: ["Вы приняли участие в симуляции."], improvements: ["AI-тренер не смог сгенерировать отзыв из-за технической ошибки. Пожалуйста, попробуйте еще раз."], summary: "Произошла ошибка при генерации отзыва.", overallScore: 0 },
+    'uk-UA': { strengths: ["Ви взяли участь у симуляції."], improvements: ["AI-тренер не зміг згенерувати відгук через технічну помилку. Будь ласка, спробуйте ще раз."], summary: "Сталася помилка під час генерації відгуку.", overallScore: 0 },
+    'de-DE': { strengths: ["Sie haben an der Simulation teilgenommen."], improvements: ["Der KI-Coach konnte aufgrund eines technischen Fehlers kein Feedback generieren. Bitte versuchen Sie es erneut."], summary: "Beim Generieren des Feedbacks ist ein Fehler aufgetreten.", overallScore: 0 },
+    'es-ES': { strengths: ["Participaste en la simulación."], improvements: ["El entrenador de IA no pudo generar comentarios debido a un error técnico. Por favor, inténtalo de nuevo."], summary: "Ocurrió un error al generar los comentarios.", overallScore: 0 },
+    'fr-FR': { strengths: ["Vous avez participé à la simulation."], improvements: ["Le coach IA n'a pas pu générer de feedback en raison d'une erreur technique. Veuillez réessayer."], summary: "Une erreur s'est produite lors de la génération du feedback.", overallScore: 0 },
+    'fil-PH': { strengths: ["Nakilahok ka sa simulation."], improvements: ["Hindi makabuo ng feedback ang AI coach dahil sa isang teknikal na error. Pakisubukang muli."], summary: "Nagkaroon ng error habang bumubuo ng feedback.", overallScore: 0 },
+};
+
+
 // This new function calls the Gemini API to get a dynamic initial greeting.
 export async function getInitialGreeting(scenario: Scenario, language: string): Promise<string> {
   // Fix: Per guidelines, create a new GoogleGenAI instance for each API call to use the latest API key.
@@ -48,8 +80,8 @@ The greeting MUST be in the language specified by this code: ${language}.
     if (error instanceof Error && error.message.includes("Requested entity was not found.")) {
         window.dispatchEvent(new Event('apiKeyInvalid'));
     }
-    // Fallback greeting in case of an error
-    return "Hello, this is the front desk. How can I help you?";
+    // Fallback greeting in case of an error, localized.
+    return GREETING_FALLBACKS[language] || GREETING_FALLBACKS['en-US'];
   }
 }
 
@@ -60,8 +92,6 @@ export async function getGatekeeperResponse(scenario: Scenario, history: ChatMes
   // FIX: Per coding guidelines, the API key must be obtained from process.env.API_key.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
-  
-  const formattedHistory = history.map(msg => `${msg.role}: ${msg.text}`).join('\n');
 
   const systemInstruction = `You are an AI role-playing as a gatekeeper (secretary/assistant) in a sales training simulation. You are a top-tier professional.
 
@@ -87,12 +117,17 @@ Your entire output must be a single, valid JSON object with two keys:
 - "connected": A boolean value. Set to true ONLY if you are connecting the user to the decision-maker. Otherwise, it must be false.
 `;
   
-  const contents = `Here is the conversation history so far:\n${formattedHistory}\n\nBased on this history and your instructions, and especially the last user message, provide your JSON response.`;
+  // FIX: Pass conversation history as a structured object instead of a single string
+  // This improves model reliability, especially for non-English conversations.
+  const geminiHistory = history.map(msg => ({
+    role: msg.role,
+    parts: [{ text: msg.text }],
+  }));
 
   try {
     const response = await ai.models.generateContent({
       model,
-      contents: contents,
+      contents: geminiHistory,
       config: {
         systemInstruction: systemInstruction,
         responseMimeType: "application/json",
@@ -116,10 +151,7 @@ Your entire output must be a single, valid JSON object with two keys:
     if (error instanceof Error && error.message.includes("Requested entity was not found.")) {
         window.dispatchEvent(new Event('apiKeyInvalid'));
     }
-    return {
-      text: "I'm sorry, we seem to be experiencing some technical difficulties. Could you please call back in a few minutes?",
-      connected: false,
-    };
+    return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
   }
 }
 
@@ -197,11 +229,6 @@ Please provide your detailed feedback in the specified JSON format.
     if (error instanceof Error && error.message.includes("Requested entity was not found.")) {
         window.dispatchEvent(new Event('apiKeyInvalid'));
     }
-    return {
-      strengths: ["You participated in the simulation."],
-      improvements: ["The AI coach was unable to generate feedback due to a technical error. Please try again."],
-      summary: "An error occurred while generating feedback.",
-      overallScore: 0,
-    };
+    return FEEDBACK_FALLBACKS[language] || FEEDBACK_FALLBACKS['en-US'];
   }
 }
