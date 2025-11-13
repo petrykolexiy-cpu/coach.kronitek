@@ -107,29 +107,42 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   - "connected": A boolean value. True only if you are putting the call through. False otherwise.
 `;
   
-  // ARCHITECTURAL FIX 3.0: This is the definitive fix for the conversation history.
-  // The Gemini API requires that the `contents` array starts with a 'user' role and alternates strictly.
-  // Our simulation starts with a 'model' role (the gatekeeper's greeting), violating this rule.
-  // This logic constructs a valid `apiHistory` for the API without modifying the UI's `history`.
-  const uiHistory = history.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }));
+  let apiHistory = history.map(msg => ({ role: msg.role as 'user' | 'model', parts: [{ text: msg.text }] }));
+  let modifiedSystemInstruction = systemInstruction;
 
-  // We prepend a synthetic 'user' turn ONLY if the history starts with a 'model' turn.
-  // This user turn is minimal and contextual ("I am making a phone call"), setting the scene for the AI.
-  // This ensures the sequence sent to the API is always valid (user -> model -> user -> ...), resolving the core error.
-  const apiHistory = (uiHistory.length > 0 && uiHistory[0].role === 'model') 
-    ? [
-        { role: 'user' as const, parts: [{ text: "I am making a phone call to the company." }] },
-        ...uiHistory
-      ]
-    : uiHistory;
+  // ARCHITECTURAL FIX 4.0: This is the definitive fix for the conversation history.
+  // The Gemini API requires that the `contents` array starts with a 'user' role.
+  // Our simulation starts with a 'model' role (the greeting), violating this rule.
+  // This logic resolves the issue by extracting the initial model greeting,
+  // passing the now-valid rest of the history to `contents`, and injecting the greeting
+  // into the `systemInstruction` as context. This is the cleanest, most robust solution.
+  if (apiHistory.length > 0 && apiHistory[0].role === 'model') {
+    const greetingText = apiHistory[0].parts[0].text;
+    
+    const contextHeader = `
+**// 5. CONVERSATION CONTEXT**
+The conversation has already begun. Your first line (the greeting) was: "${greetingText}"
+The following is the rest of the conversation transcript. You must now provide your next response based on the last thing the user said.`;
+    
+    modifiedSystemInstruction = `${systemInstruction}\n${contextHeader}`;
+    
+    // The rest of the history is now a valid `contents` array because it starts with the user's first message.
+    apiHistory = apiHistory.slice(1);
+  }
+
+  // A robust check: if for some reason the history is now empty (e.g., only contained the greeting),
+  // we can't send an empty `contents` array to the API.
+  if (apiHistory.length === 0) {
+      console.warn("getGatekeeperResponse was called with a history that only contained the initial greeting. Returning fallback.");
+      return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
+  }
   
   try {
     const response = await ai.models.generateContent({
       model,
-      // Pass the corrected, API-compliant history.
       contents: apiHistory,
       config: {
-        systemInstruction,
+        systemInstruction: modifiedSystemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
