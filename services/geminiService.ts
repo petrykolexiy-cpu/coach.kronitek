@@ -107,22 +107,28 @@ Your primary responsibility is to protect the time and focus of the decision-mak
   - "connected": A boolean value. True only if you are putting the call through. False otherwise.
 `;
   
-  // ARCHITECTURAL FIX 2.0: The entire prompt now lives in `systemInstruction`.
-  // To satisfy the API's 'user-first' rule for the `contents` history, we prepend a single,
-  // neutral, context-setting message as the 'user'. The actual conversation history then follows.
-  // This is much cleaner and more aligned with the API's design.
-  const contents = [
-      { role: 'user' as const, parts: [{ text: "Let's begin the role-play. I am the sales manager. You are the gatekeeper. You will speak first." }] },
-      ...history.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }))
-  ];
+  // ARCHITECTURAL FIX 3.0: This is the definitive fix for the conversation history.
+  // The Gemini API requires that the `contents` array starts with a 'user' role and alternates strictly.
+  // Our simulation starts with a 'model' role (the gatekeeper's greeting), violating this rule.
+  // This logic constructs a valid `apiHistory` for the API without modifying the UI's `history`.
+  const uiHistory = history.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }));
 
+  // We prepend a synthetic 'user' turn ONLY if the history starts with a 'model' turn.
+  // This user turn is minimal and contextual ("I am making a phone call"), setting the scene for the AI.
+  // This ensures the sequence sent to the API is always valid (user -> model -> user -> ...), resolving the core error.
+  const apiHistory = (uiHistory.length > 0 && uiHistory[0].role === 'model') 
+    ? [
+        { role: 'user' as const, parts: [{ text: "I am making a phone call to the company." }] },
+        ...uiHistory
+      ]
+    : uiHistory;
+  
   try {
     const response = await ai.models.generateContent({
       model,
-      // The conversation history now correctly starts with 'user' and alternates.
-      contents: contents,
+      // Pass the corrected, API-compliant history.
+      contents: apiHistory,
       config: {
-        // The detailed instructions are provided here, separately from the conversation.
         systemInstruction,
         responseMimeType: "application/json",
         responseSchema: {
