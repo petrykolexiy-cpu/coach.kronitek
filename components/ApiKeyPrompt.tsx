@@ -1,14 +1,14 @@
+// FIX: Added a triple-slash directive to include Vite's client-side type definitions, which resolves TypeScript errors for `import.meta.env`.
+/// <reference types="vite/client" />
+
 import React, { useState, useEffect, useCallback } from 'react';
 
-// Fix: Resolved a TypeScript error related to global type declarations for `window.aistudio`.
-// The inline object type was replaced with a named `AIStudio` interface to ensure consistency.
 declare global {
   interface AIStudio {
     hasSelectedApiKey: () => Promise<boolean>;
     openSelectKey: () => Promise<void>;
   }
   interface Window {
-    // FIX: Made `aistudio` optional to match runtime checks and resolve potential declaration conflicts.
     aistudio?: AIStudio;
   }
 }
@@ -17,9 +17,35 @@ interface ApiKeyPromptProps {
   children: React.ReactNode;
 }
 
+const VercelInstructions = () => (
+    <div className="flex items-center justify-center min-h-screen bg-slate-900">
+        <div className="bg-slate-800 border border-slate-700 rounded-lg p-8 max-w-2xl text-center mx-4">
+            <h2 className="text-2xl font-bold text-white mb-4">Configuration Required for Vercel</h2>
+            <p className="text-slate-400 mb-6">
+                The Gemini API key is missing. To run this application on Vercel or locally, you must set an environment variable.
+            </p>
+            <div className="text-left bg-slate-900 p-4 rounded-lg border border-slate-600">
+                <h3 className="font-semibold text-lg text-white mb-3">Follow these steps:</h3>
+                <ol className="list-decimal list-inside space-y-2 text-slate-300">
+                    <li>Go to your project settings on Vercel.</li>
+                    <li>Navigate to the "Environment Variables" section.</li>
+                    <li>Create a new variable with the name <code className="bg-slate-700 text-amber-400 px-1 py-0.5 rounded text-sm">VITE_API_KEY</code>.</li>
+                    <li>Paste your Gemini API key into the value field.</li>
+                    <li>Re-deploy your application for the changes to take effect.</li>
+                </ol>
+            </div>
+             <p className="text-slate-500 mt-4 text-sm">
+                For local development, create a <code className="bg-slate-700 text-amber-400 px-1 py-0.5 rounded text-sm">.env</code> file in the project root with the same variable.
+            </p>
+        </div>
+    </div>
+);
+
+
 export const ApiKeyPrompt: React.FC<ApiKeyPromptProps> = ({ children }) => {
   const [isKeySelected, setIsKeySelected] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
+  const [isVercelEnv, setIsVercelEnv] = useState(false);
 
   const handleApiKeyInvalid = useCallback(() => {
     console.warn("API key is invalid. Prompting user to select a new one.");
@@ -29,16 +55,22 @@ export const ApiKeyPrompt: React.FC<ApiKeyPromptProps> = ({ children }) => {
   useEffect(() => {
     const checkKey = async () => {
       if (window.aistudio) {
+        setIsVercelEnv(false);
         try {
           const hasKey = await window.aistudio.hasSelectedApiKey();
           setIsKeySelected(hasKey);
         } catch (error) {
-          console.error("Error checking for API key:", error);
+          console.error("Error checking for API key in AI Studio:", error);
           setIsKeySelected(false);
         }
       } else {
-        console.warn("window.aistudio not found. Assuming API key is available in dev mode.");
-        setIsKeySelected(true);
+        // This is a Vercel or local dev environment
+        setIsVercelEnv(true);
+        if (import.meta.env.VITE_API_KEY) {
+          setIsKeySelected(true);
+        } else {
+          setIsKeySelected(false);
+        }
       }
       setIsChecking(false);
     };
@@ -71,6 +103,10 @@ export const ApiKeyPrompt: React.FC<ApiKeyPromptProps> = ({ children }) => {
   }
 
   if (!isKeySelected) {
+    if (isVercelEnv) {
+        return <VercelInstructions />;
+    }
+
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-900">
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-8 max-w-lg text-center mx-4">

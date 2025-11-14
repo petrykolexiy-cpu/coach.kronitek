@@ -42,6 +42,13 @@ const GlobeIcon = () => (
     </svg>
 );
 
+const MicrophoneSlashIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-12 h-12 text-red-500">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75v3.75c0 1.98-1.529 3.599-3.499 3.841M12 12.75V15m0 6.75V15m0 0H9.75m0 0A4.5 4.5 0 0 1 5.25 15v-3.75m0 0v-3.75A4.5 4.5 0 0 1 9.75 3v0A4.5 4.5 0 0 1 14.25 7.5v1.5M17.25 9.75h.008v.008h-.008V9.75Zm-12 0h.008v.008h-.008V9.75ZM12 3.75h.008v.008H12V3.75Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="m3 3 18 18" />
+    </svg>
+);
+
 const languages = [
   { code: 'en-US', name: 'English (US)' },
   { code: 'ru-RU', name: 'Russian' },
@@ -55,6 +62,7 @@ const languages = [
 export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setMessages, onEndSimulation, isReadOnly = false, selectedLang, onLangChange, onSuccess }) => {
   const [isLive, setIsLive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Refs for managing the live session and audio
@@ -117,6 +125,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
 
   const handleStartCall = async () => {
     setIsConnecting(true);
+    setMicError(null);
     setMessages([]);
 
     try {
@@ -210,7 +219,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         sessionPromiseRef.current = sessionPromise;
     } catch (error) {
         console.error("Failed to start call:", error);
-        alert("Could not access microphone. Please check permissions and try again.");
+        let errorMessage = "An unknown microphone error occurred. Please check your hardware and browser settings.";
+        if (error instanceof DOMException) {
+            if (error.name === 'NotAllowedError') {
+                errorMessage = "Microphone access was denied. Please allow microphone access in your browser settings (often by clicking the lock icon in the address bar) and try again.";
+            } else if (error.name === 'NotFoundError') {
+                errorMessage = "No microphone was found on your device. Please connect a microphone and try again.";
+            }
+        }
+        setMicError(errorMessage);
         cleanup();
     }
   };
@@ -223,44 +240,72 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
 
   const callInProgress = isLive || isConnecting;
 
+  const renderContent = () => {
+    if (micError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-center p-4">
+          <MicrophoneSlashIcon />
+          <h3 className="text-xl font-semibold text-red-400 mt-4 mb-2">Microphone Error</h3>
+          <p className="text-slate-300 mb-6 max-w-md">{micError}</p>
+          <button
+            onClick={handleStartCall}
+            className="px-6 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+
+    if (isConnecting) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full">
+            <div className="flex items-center justify-center space-x-1">
+              <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse [animation-delay:-0.3s]"></div>
+              <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse [animation-delay:-0.15s]"></div>
+              <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse"></div>
+            </div>
+            <p className="text-slate-400 mt-2">Connecting...</p>
+        </div>
+      );
+    }
+
+    if (messages.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-center">
+          <p className="text-slate-400">Press "Start Live Call" to begin the simulation.</p>
+        </div>
+      );
+    }
+    
+    return (
+      <div className="space-y-4 p-4">
+        {messages.map((msg, index) => (
+            <div key={index} className={`flex items-end gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              {msg.role === 'model' && <div className="flex-shrink-0 bg-slate-700 rounded-full p-2"><RobotIcon /></div>}
+              <div
+                className={`max-w-md lg:max-w-lg px-4 py-2 rounded-lg ${
+                  msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-200 rounded-bl-none'
+                }`}
+              >
+                <p style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</p>
+              </div>
+               {msg.role === 'user' && <div className="flex-shrink-0 bg-blue-600 text-white rounded-full p-2"><UserIcon /></div>}
+            </div>
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full bg-slate-800 rounded-lg border border-slate-700">
       <div className="p-4 border-b border-slate-700">
         <h3 className="text-lg font-semibold text-blue-400">{scenario.title}</h3>
         <p className="text-sm text-slate-400">{scenario.gatekeeperPersona}</p>
       </div>
-      <div className="flex-1 p-4 overflow-y-auto">
-        <div className="space-y-4">
-          {messages.map((msg, index) => (
-              <div key={index} className={`flex items-end gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                {msg.role === 'model' && <div className="flex-shrink-0 bg-slate-700 rounded-full p-2"><RobotIcon /></div>}
-                <div
-                  className={`max-w-md lg:max-w-lg px-4 py-2 rounded-lg ${
-                    msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-200 rounded-bl-none'
-                  }`}
-                >
-                  <p style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</p>
-                </div>
-                 {msg.role === 'user' && <div className="flex-shrink-0 bg-blue-600 text-white rounded-full p-2"><UserIcon /></div>}
-              </div>
-          ))}
-          {!isLive && messages.length === 0 && !isConnecting && (
-              <div className="text-center text-slate-400 p-8">
-                  <p>Press "Start Live Call" to begin the simulation.</p>
-              </div>
-          )}
-          {isConnecting && (
-             <div className="flex items-center gap-2 justify-center p-8">
-               <div className="flex items-center justify-center space-x-1">
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse [animation-delay:-0.3s]"></div>
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse [animation-delay:-0.15s]"></div>
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse"></div>
-               </div>
-               <p className="text-slate-400">Connecting...</p>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
+      <div className="flex-1 overflow-y-auto">
+        {renderContent()}
       </div>
       <div className="p-4 border-t border-slate-700 bg-slate-800 rounded-b-lg">
         <div className="flex items-center gap-2 mb-4">
