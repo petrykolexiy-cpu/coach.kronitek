@@ -215,7 +215,23 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         sessionPromiseRef.current = sessionPromise;
     } catch (error) {
         console.error("Failed to start call:", error);
-        setMicError("Microphone access was denied. Please click the lock icon (🔒) in your address bar to allow microphone access for this site, then try again.");
+        let errorMessage = "An unexpected error occurred. Please try again.";
+        if (error instanceof Error) {
+            switch (error.name) {
+                case 'NotAllowedError':
+                    errorMessage = "Microphone access was denied. Please click the lock icon (🔒) in your address bar to allow microphone access for this site, then try again.";
+                    break;
+                case 'NotFoundError':
+                    errorMessage = "No microphone found. Please make sure your microphone is properly connected and recognized by your system.";
+                    break;
+                case 'NotReadableError':
+                    errorMessage = "Cannot access the microphone. It might be in use by another application (e.g., Zoom, Skype). Please close any other applications using the microphone and click 'Retry'.";
+                    break;
+                default:
+                     errorMessage = `An unknown microphone error occurred: ${error.message}. Please check your hardware and browser settings.`;
+            }
+        }
+        setMicError(errorMessage);
         cleanup();
     }
   };
