@@ -62,6 +62,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
   const [isLive, setIsLive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
+  const [errorTitle, setErrorTitle] = useState('Microphone Error');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Refs for managing the live session and audio
@@ -127,10 +128,35 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
     setMicError(null);
     setMessages([]);
 
+    let stream: MediaStream;
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStreamRef.current = stream;
+    } catch (error) {
+        console.error("Failed to get microphone access:", error);
+        setErrorTitle("Microphone Error");
+        let errorMessage = "An unexpected error occurred. Please try again.";
+        if (error instanceof Error) {
+            switch (error.name) {
+                case 'NotAllowedError':
+                    errorMessage = "Microphone access was denied. Please click the lock icon (🔒) in your address bar to allow microphone access for this site, then try again.";
+                    break;
+                case 'NotFoundError':
+                    errorMessage = "No microphone found. Please make sure your microphone is properly connected and recognized by your system.";
+                    break;
+                case 'NotReadableError':
+                    errorMessage = "Cannot access the microphone. It might be in use by another application (e.g., Zoom, Skype). Please close any other applications using the microphone and click 'Retry'.";
+                    break;
+                default:
+                     errorMessage = `An unknown microphone error occurred: ${error.message}. Please check your hardware and browser settings.`;
+            }
+        }
+        setMicError(errorMessage);
+        setIsConnecting(false);
+        return;
+    }
 
+    try {
         const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
         const inputCtx = new AudioContext({ sampleRate: 16000 });
         const outputCtx = new AudioContext({ sampleRate: 24000 });
@@ -214,22 +240,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         });
         sessionPromiseRef.current = sessionPromise;
     } catch (error) {
-        console.error("Failed to start call:", error);
-        let errorMessage = "An unexpected error occurred. Please try again.";
+        console.error("Failed to start Gemini Live session:", error);
+        let errorMessage = "An unexpected error occurred while connecting to the AI. Please try again.";
         if (error instanceof Error) {
-            switch (error.name) {
-                case 'NotAllowedError':
-                    errorMessage = "Microphone access was denied. Please click the lock icon (🔒) in your address bar to allow microphone access for this site, then try again.";
-                    break;
-                case 'NotFoundError':
-                    errorMessage = "No microphone found. Please make sure your microphone is properly connected and recognized by your system.";
-                    break;
-                case 'NotReadableError':
-                    errorMessage = "Cannot access the microphone. It might be in use by another application (e.g., Zoom, Skype). Please close any other applications using the microphone and click 'Retry'.";
-                    break;
-                default:
-                     errorMessage = `An unknown microphone error occurred: ${error.message}. Please check your hardware and browser settings.`;
-            }
+             if (error.message.includes("API Key")) {
+                setErrorTitle("API Key Error");
+                errorMessage = "Connection failed: The API Key is missing or was not set correctly. You will be returned to the API key selection screen.";
+                window.dispatchEvent(new Event('apiKeyInvalid'));
+             } else {
+                setErrorTitle("Connection Error");
+                errorMessage = `A connection error occurred: ${error.message}. Please try again.`;
+             }
         }
         setMicError(errorMessage);
         cleanup();
@@ -283,14 +304,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
           {micError && (
             <div className="text-center text-slate-300 p-8 bg-slate-900/50 rounded-lg">
                 <MicErrorIcon />
-                <h3 className="text-xl font-semibold mt-4 text-white">Microphone Error</h3>
+                <h3 className="text-xl font-semibold mt-4 text-white">{errorTitle}</h3>
                 <p className="mt-2">{micError}</p>
-                <button
-                    onClick={handleStartCall}
-                    className="mt-6 px-4 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 transition-colors"
-                >
-                    Retry
-                </button>
+                {!errorTitle.includes("API Key") && (
+                  <button
+                      onClick={handleStartCall}
+                      className="mt-6 px-4 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 transition-colors"
+                  >
+                      Retry
+                  </button>
+                )}
             </div>
           )}
           <div ref={messagesEndRef} />
