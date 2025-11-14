@@ -1,91 +1,62 @@
 import React, { useState, useCallback } from 'react';
 import { Scenario, ChatMessage, Feedback } from './types';
-import { getInitialGreeting, getGatekeeperResponse, getPerformanceFeedback } from './services/geminiService';
+import { getPerformanceFeedback } from './services/geminiService';
 import { Header } from './components/Header';
 import { ScenarioSelector } from './components/ScenarioSelector';
 import { ChatWindow } from './components/ChatWindow';
 import { FeedbackPanel } from './components/FeedbackPanel';
 import { ApiKeyPrompt } from './components/ApiKeyPrompt';
 
-const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
-
 const App: React.FC = () => {
   const [currentScenario, setCurrentScenario] = useState<Scenario | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFeedbackLoading, setIsFeedbackLoading] = useState(false);
+  const [isLoadingFeedback, setIsLoadingFeedback] = useState(false);
   const [isSimulationSuccess, setIsSimulationSuccess] = useState(false);
-  const [selectedLang, setSelectedLang] = useState('en-US');
+  const [selectedLang, setSelectedLang] = useState('ru-RU');
 
-  const handleSelectScenario = useCallback(async (scenario: Scenario) => {
+  const handleSelectScenario = useCallback((scenario: Scenario) => {
     setCurrentScenario(scenario);
     setMessages([]);
     setFeedback(null);
-    setIsLoading(true);
-
-    const greeting = await getInitialGreeting(scenario, selectedLang);
-    setMessages([{ role: 'model', text: greeting }]);
-    
-    setIsLoading(false);
-  }, [selectedLang]);
+    setIsLoadingFeedback(false);
+    setIsSimulationSuccess(false);
+  }, []);
 
   const handleEndSimulation = useCallback(async () => {
-    if (!currentScenario || messages.length < 2) return;
+    if (!currentScenario || messages.length === 0 || isLoadingFeedback) return;
     
-    setIsFeedbackLoading(true);
+    setIsLoadingFeedback(true);
+    const successMessage: ChatMessage = { 
+        role: 'model', 
+        text: `🎉 Успех! Вы соединились с ${currentScenario.decisionMaker}. Нажмите "Завершить и получить отзыв", чтобы увидеть анализ.` 
+    };
+    if (isSimulationSuccess) {
+      setMessages(prev => [...prev, successMessage]);
+    }
+
     const performanceFeedback = await getPerformanceFeedback(currentScenario, messages, isSimulationSuccess, selectedLang);
     setFeedback(performanceFeedback);
-    setIsFeedbackLoading(false);
-  }, [currentScenario, messages, isSimulationSuccess, selectedLang]);
+    setIsLoadingFeedback(false);
+  }, [currentScenario, messages, isSimulationSuccess, selectedLang, isLoadingFeedback]);
 
-  const handleSendMessage = useCallback(async (messageText: string) => {
-    if (!currentScenario) return;
-
-    const userMessage: ChatMessage = { role: 'user', text: messageText };
-    
-    // Create the definitive history for this turn's API call *before* any state updates.
-    const historyForApi = [...messages, userMessage];
-
-    // Optimistically update the UI with the user's message.
-    setMessages(historyForApi); 
-    setIsLoading(true);
-
-    const { text: response, connected } = await getGatekeeperResponse(currentScenario, historyForApi, selectedLang);
-
-    // After the API call, prepare all new messages from the model.
-    const modelMessages: ChatMessage[] = [{ role: 'model', text: response }];
-
-    if (connected) {
-        await delay(500);
-        modelMessages.push({ 
-            role: 'model', 
-            text: `🎉 Success! You've reached ${currentScenario.decisionMaker}. Click "End & Get Feedback" to see your analysis.` 
-        });
-    }
-
-    // Append all model messages in a single, atomic update.
-    setMessages(prev => [...prev, ...modelMessages]);
-    
-    if (connected) {
-        setIsSimulationSuccess(true);
-    }
-    
-    setIsLoading(false);
-  }, [currentScenario, messages, selectedLang]);
+  const handleSuccess = useCallback(() => {
+    setIsSimulationSuccess(true);
+    // The visual feedback for success is now handled in `handleEndSimulation`
+    // to ensure it appears just before the feedback panel.
+  }, []);
 
 
   const handleRestart = () => {
     setCurrentScenario(null);
     setMessages([]);
     setFeedback(null);
-    setIsLoading(false);
-    setIsFeedbackLoading(false);
+    setIsLoadingFeedback(false);
     setIsSimulationSuccess(false);
   };
   
-  const showFeedbackPanel = isFeedbackLoading || !!feedback;
-  const isChatReadOnly = isFeedbackLoading || !!feedback || isSimulationSuccess;
+  const showFeedbackPanel = isLoadingFeedback || !!feedback;
+  const isChatReadOnly = isLoadingFeedback || !!feedback || isSimulationSuccess;
 
   return (
     <ApiKeyPrompt>
@@ -111,18 +82,18 @@ const App: React.FC = () => {
                 <ChatWindow
                     scenario={currentScenario}
                     messages={messages}
-                    onSendMessage={handleSendMessage}
+                    setMessages={setMessages}
                     onEndSimulation={handleEndSimulation}
-                    isLoading={isLoading}
                     isReadOnly={isChatReadOnly}
                     selectedLang={selectedLang}
                     onLangChange={setSelectedLang}
+                    onSuccess={handleSuccess}
                 />
                 {showFeedbackPanel && (
                     <FeedbackPanel 
                         feedback={feedback} 
                         onRestart={handleRestart} 
-                        isLoading={isFeedbackLoading}
+                        isLoading={isLoadingFeedback}
                     />
                 )}
               </div>

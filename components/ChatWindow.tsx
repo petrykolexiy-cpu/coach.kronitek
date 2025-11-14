@@ -1,16 +1,17 @@
-
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ChatMessage, Scenario } from '../types';
+import { createLiveSession, decode, decodeAudioData, createPcmBlob } from '../services/geminiService';
+import { LiveServerMessage, LiveSession } from '@google/genai';
 
 interface ChatWindowProps {
   scenario: Scenario;
   messages: ChatMessage[];
-  onSendMessage: (message: string) => void;
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   onEndSimulation: () => void;
-  isLoading: boolean;
   isReadOnly?: boolean;
   selectedLang: string;
   onLangChange: (lang: string) => void;
+  onSuccess: () => void;
 }
 
 const UserIcon = () => (
@@ -26,10 +27,12 @@ const RobotIcon = () => (
     </svg>
 );
 
-const MicrophoneIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-        <path d="M8.25 4.5a3.75 3.75 0 1 1 7.5 0v8.25a3.75 3.75 0 1 1-7.5 0V4.5Z" />
-        <path d="M6 10.5a.75.75 0 0 1 .75.75v1.5a4.5 4.5 0 1 0 9 0v-1.5a.75.75 0 0 1 1.5 0v1.5a6 6 0 1 1-12 0v-1.5a.75.75 0 0 1 .75-.75Z" />
+// FIX: Modified the PhoneIcon component to accept and merge a `className` prop.
+// This allows for custom styling (like rotation) and resolves a TypeScript error
+// caused by passing an undeclared prop.
+const PhoneIcon = ({ className }: { className?: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={`w-6 h-6 ${className || ''}`}>
+      <path fillRule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.279-.087.431l4.108 7.552a.75.75 0 0 0 .914.315l1.46-1.095c.433-.325.954-.399 1.422-.195l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C6.55 22.5 1.5 17.45 1.5 9.75V7.5Zm17.08-2.625A7.5 7.5 0 0 0 9.75 1.5H7.5V3h2.25A6 6 0 0 1 18 9h1.5V6.75l-.92-.23Z" clipRule="evenodd" />
     </svg>
 );
 
@@ -38,14 +41,6 @@ const GlobeIcon = () => (
       <path fillRule="evenodd" d="M9.483 2.262c.295-.14.629-.14.924 0l5.998 2.999a.75.75 0 0 1 .013 1.336l-1.88 1.056a11.91 11.91 0 0 1-2.043 1.08c-.14.072-.284.14-.43.204.058.21.112.422.162.636.196.834.34 1.685.43 2.559.076.73.076 1.463 0 2.193-.09.874-.234 1.725-.43 2.56a.75.75 0 0 1-1.352-.615c.18-.75.31-1.51.38-2.274a12.316 12.316 0 0 0 0-1.588c-.07-.764-.2-1.523-.38-2.274a.75.75 0 0 1 .52-1.026.75.75 0 0 1 1.025.52c.17.72.3 1.455.37 2.2.07.745.07 1.49 0 2.235-.088.88-.238 1.74-.44 2.58a.75.75 0 1 1-1.353-.615c.19-.79.33-1.6.41-2.41a10.823 10.823 0 0 0 0-1.972c-.08-.81-.22-1.62-.41-2.41a.75.75 0 0 1 .52-1.026.75.75 0 0 1 1.025.52c.18.75.31 1.51.38 2.274a12.316 12.316 0 0 0 0 1.588c-.07.764-.2 1.523-.38-2.274a.75.75 0 1 1-1.353-.615c-.14-.588-.31-1.17-.505-1.745a16.3 16.3 0 0 0-.435-1.185l-1.956-3.424a.75.75 0 0 1 .02-1.341l5.998-2.999ZM1.956 8.56A.75.75 0 0 1 3 8.25l1.98.02a13.42 13.42 0 0 1 2.23 1.394.75.75 0 0 1-.94 1.166 11.92 11.92 0 0 0-1.95-1.222l-2.04.02a.75.75 0 0 1-.275-1.068Z" clipRule="evenodd" />
     </svg>
 );
-
-
-declare global {
-  interface Window {
-    SpeechRecognition: any;
-    webkitSpeechRecognition: any;
-  }
-}
 
 const languages = [
   { code: 'en-US', name: 'English (US)' },
@@ -57,11 +52,24 @@ const languages = [
   { code: 'fil-PH', name: 'Filipino' },
 ];
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSendMessage, onEndSimulation, isLoading, isReadOnly = false, selectedLang, onLangChange }) => {
-  const [input, setInput] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
+export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setMessages, onEndSimulation, isReadOnly = false, selectedLang, onLangChange, onSuccess }) => {
+  const [isLive, setIsLive] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
+
+  // Refs for managing the live session and audio
+  const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
+  const inputAudioContextRef = useRef<AudioContext | null>(null);
+  const outputAudioContextRef = useRef<AudioContext | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const audioPlaybackQueue = useRef<{ buffer: AudioBuffer; startTime: number }[]>([]);
+  const nextStartTime = useRef(0);
+  const audioSources = useRef(new Set<AudioBufferSourceNode>());
+
+  const currentInputTranscriptionRef = useRef('');
+  const currentOutputTranscriptionRef = useRef('');
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -69,70 +77,151 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
 
   useEffect(scrollToBottom, [messages]);
 
-  useEffect(() => {
-    if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
-      console.warn("Speech Recognition not supported by this browser.");
-      return;
-    }
+  const cleanup = useCallback(() => {
+    setIsLive(false);
+    setIsConnecting(false);
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.lang = selectedLang;
-    recognition.interimResults = true;
-
-    recognition.onstart = () => {
-      setIsRecording(true);
-    };
-
-    recognition.onresult = (event: any) => {
-      const transcript = Array.from(event.results)
-        .map((result: any) => result[0])
-        .map((result) => result.transcript)
-        .join('');
-      setInput(transcript);
-    };
-
-    recognition.onerror = (event: any) => {
-      console.error("Speech recognition error:", event.error);
-      setIsRecording(false);
-    };
+    mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+    scriptProcessorRef.current?.disconnect();
+    mediaStreamSourceRef.current?.disconnect();
     
-    recognition.onend = () => {
-      setIsRecording(false);
-    };
+    if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
+    if (outputAudioContextRef.current?.state !== 'closed') outputAudioContextRef.current?.close();
+    
+    audioSources.current.forEach(source => source.stop());
+    audioSources.current.clear();
+    
+    sessionPromiseRef.current = null;
+    inputAudioContextRef.current = null;
+    outputAudioContextRef.current = null;
+    mediaStreamRef.current = null;
+    scriptProcessorRef.current = null;
+    mediaStreamSourceRef.current = null;
+  }, []);
 
-    recognitionRef.current = recognition;
+  const handleStopCall = useCallback(async (andEndSimulation = false) => {
+    if (sessionPromiseRef.current) {
+        try {
+            const session = await sessionPromiseRef.current;
+            session.close();
+        } catch (e) {
+            console.error("Error closing session:", e);
+        }
+    }
+    cleanup();
+    if (andEndSimulation) {
+        onEndSimulation();
+    }
+  }, [cleanup, onEndSimulation]);
 
+
+  const handleStartCall = async () => {
+    setIsConnecting(true);
+    setMessages([]);
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStreamRef.current = stream;
+
+        // FIX: Replaced direct usage of `window.webkitAudioContext` with a polyfill-style
+        // variable and a type assertion. This resolves a TypeScript error where the prefixed
+        // version is not in the standard type definitions and ensures audio works on older browsers.
+        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+        const inputCtx = new AudioContext({ sampleRate: 16000 });
+        const outputCtx = new AudioContext({ sampleRate: 24000 });
+        inputAudioContextRef.current = inputCtx;
+        outputAudioContextRef.current = outputCtx;
+        nextStartTime.current = 0;
+        
+        const sessionPromise = createLiveSession(scenario, selectedLang, {
+            onopen: () => {
+                console.log('Session opened');
+                setIsConnecting(false);
+                setIsLive(true);
+                
+                const source = inputCtx.createMediaStreamSource(stream);
+                mediaStreamSourceRef.current = source;
+                
+                const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
+                scriptProcessorRef.current = scriptProcessor;
+
+                scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                    const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                    const pcmBlob = createPcmBlob(inputData);
+                    sessionPromiseRef.current?.then((session) => {
+                        session.sendRealtimeInput({ media: pcmBlob });
+                    });
+                };
+                source.connect(scriptProcessor);
+                scriptProcessor.connect(inputCtx.destination);
+            },
+            onmessage: async (message: LiveServerMessage) => {
+                if (message.toolCall) {
+                    for (const fc of message.toolCall.functionCalls) {
+                        if (fc.name === 'connectCall') {
+                            onSuccess();
+                            await handleStopCall();
+                        }
+                    }
+                }
+
+                if (message.serverContent?.inputTranscription) {
+                  currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
+                }
+                if (message.serverContent?.outputTranscription) {
+                  currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
+                }
+                if (message.serverContent?.turnComplete) {
+                    const userInput = currentInputTranscriptionRef.current.trim();
+                    const modelOutput = currentOutputTranscriptionRef.current.trim();
+                    const newHistory: ChatMessage[] = [];
+                    if (userInput) newHistory.push({ role: 'user', text: userInput });
+                    if (modelOutput) newHistory.push({ role: 'model', text: modelOutput });
+
+                    if (newHistory.length > 0) {
+                      setMessages(prev => [...prev, ...newHistory]);
+                    }
+                    currentInputTranscriptionRef.current = '';
+                    currentOutputTranscriptionRef.current = '';
+                }
+
+                const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+                if (base64Audio) {
+                    const audioBuffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000, 1);
+                    nextStartTime.current = Math.max(nextStartTime.current, outputCtx.currentTime);
+                    const source = outputCtx.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(outputCtx.destination);
+                    source.start(nextStartTime.current);
+                    nextStartTime.current += audioBuffer.duration;
+                    audioSources.current.add(source);
+                    source.onended = () => audioSources.current.delete(source);
+                }
+            },
+            onclose: () => {
+                console.log('Session closed');
+                cleanup();
+            },
+            onerror: (e) => {
+                console.error("Session error:", e);
+                cleanup();
+            }
+        });
+        sessionPromiseRef.current = sessionPromise;
+    } catch (error) {
+        console.error("Failed to start call:", error);
+        alert("Could not access microphone. Please check permissions and try again.");
+        cleanup();
+    }
+  };
+
+  useEffect(() => {
     return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
+        cleanup();
     };
-  }, [selectedLang]);
+  }, [cleanup]);
 
-  const handleToggleRecording = () => {
-    if (!recognitionRef.current) return;
-
-    if (isRecording) {
-      recognitionRef.current.stop();
-    } else {
-      setInput('');
-      recognitionRef.current.start();
-    }
-  };
-
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isRecording) {
-      recognitionRef.current.stop();
-    }
-    if (input.trim() && !isLoading && !isReadOnly) {
-      onSendMessage(input.trim());
-      setInput('');
-    }
-  };
+  const callInProgress = isLive || isConnecting;
 
   return (
     <div className="flex flex-col h-full bg-slate-800 rounded-lg border border-slate-700">
@@ -155,23 +244,26 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
                  {msg.role === 'user' && <div className="flex-shrink-0 bg-blue-600 text-white rounded-full p-2"><UserIcon /></div>}
               </div>
           ))}
-          {isLoading && (
-             <div className="flex items-end gap-2 justify-start">
-               <div className="flex-shrink-0 bg-slate-700 rounded-full p-2"><RobotIcon /></div>
-               <div className="px-4 py-3 bg-slate-700 rounded-lg rounded-bl-none">
-                 <div className="flex items-center justify-center space-x-1">
+          {!isLive && messages.length === 0 && !isConnecting && (
+              <div className="text-center text-slate-400 p-8">
+                  <p>Press "Start Live Call" to begin the simulation.</p>
+              </div>
+          )}
+          {isConnecting && (
+             <div className="flex items-center gap-2 justify-center p-8">
+               <div className="flex items-center justify-center space-x-1">
                     <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse [animation-delay:-0.3s]"></div>
                     <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse [animation-delay:-0.15s]"></div>
                     <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse"></div>
-                 </div>
                </div>
+               <p className="text-slate-400">Connecting...</p>
             </div>
           )}
           <div ref={messagesEndRef} />
         </div>
       </div>
       <div className="p-4 border-t border-slate-700 bg-slate-800 rounded-b-lg">
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2 mb-4">
             <GlobeIcon />
             <label htmlFor="language-select" className="sr-only">Select language</label>
             <select
@@ -179,43 +271,35 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, onSe
                 value={selectedLang}
                 onChange={(e) => onLangChange(e.target.value)}
                 className="bg-slate-700 border border-slate-600 rounded-md px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-                disabled={isRecording || isLoading || isReadOnly}
+                disabled={callInProgress || isReadOnly}
             >
                 {languages.map(lang => <option key={lang.code} value={lang.code}>{lang.name}</option>)}
             </select>
         </div>
-        <form onSubmit={handleSubmit} className="flex items-center gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={isReadOnly ? "Simulation finished" : isRecording ? "Listening..." : "Your response..."}
-            className="flex-1 bg-slate-700 border border-slate-600 rounded-md px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-            disabled={isLoading || isReadOnly}
-          />
-          <button
-            type="button"
-            onClick={handleToggleRecording}
-            className={`p-2 rounded-md font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                isRecording ? 'bg-red-600 hover:bg-red-700 animate-pulse text-white' : 'bg-slate-600 hover:bg-slate-500 text-slate-200'
-            }`}
-            disabled={isLoading || isReadOnly}
-            title={isRecording ? 'Stop recording' : 'Start recording'}
-          >
-            <MicrophoneIcon />
-          </button>
-          <button
-            type="submit"
-            className="px-4 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors"
-            disabled={isLoading || !input.trim() || isReadOnly}
-          >
-            Send
-          </button>
-        </form>
+        
+        {!isLive ? (
+            <button
+                onClick={handleStartCall}
+                disabled={isConnecting || isReadOnly}
+                className="w-full flex justify-center items-center gap-2 px-4 py-3 bg-green-600 text-white rounded-md font-semibold hover:bg-green-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors"
+            >
+                <PhoneIcon />
+                {isConnecting ? 'Connecting...' : 'Start Live Call'}
+            </button>
+        ) : (
+            <button
+                onClick={() => handleStopCall()}
+                className="w-full flex justify-center items-center gap-2 px-4 py-3 bg-red-600 text-white rounded-md font-semibold hover:bg-red-700 transition-colors"
+            >
+                <PhoneIcon className="transform -rotate-135" />
+                End Call
+            </button>
+        )}
+       
          <button
-            onClick={onEndSimulation}
+            onClick={() => handleStopCall(true)}
             className="w-full mt-2 px-4 py-2 bg-rose-600 text-white rounded-md font-semibold hover:bg-rose-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors"
-            disabled={isLoading || messages.length < 2 || isReadOnly}
+            disabled={isConnecting || isReadOnly || messages.length === 0}
           >
             End & Get Feedback
         </button>

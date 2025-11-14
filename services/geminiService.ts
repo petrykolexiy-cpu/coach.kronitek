@@ -1,17 +1,7 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, LiveServerMessage, Modality, Blob, FunctionDeclaration } from "@google/genai";
 import { Scenario, ChatMessage, Feedback } from '../types';
 
 // Fallback messages translated for a better user experience
-const GREETING_FALLBACKS: { [key: string]: string } = {
-    'en-US': "Hello, this is the front desk. How can I help you?",
-    'ru-RU': "Здравствуйте, это приемная. Чем могу помочь?",
-    'uk-UA': "Доброго дня, це приймальня. Чим можу допомогти?",
-    'de-DE': "Hallo, hier ist der Empfang. Wie kann ich Ihnen helfen?",
-    'es-ES': "Hola, habla la recepción. ¿En qué puedo ayudarle?",
-    'fr-FR': "Bonjour, c'est la réception. Comment puis-je vous aider?",
-    'fil-PH': "Hello, ito po ang front desk. Ano po ang maitutulong ko sa inyo?",
-};
-
 const RESPONSE_FALLBACKS: { [key: string]: { text: string, connected: boolean } } = {
     'en-US': { text: "I'm sorry, we seem to be experiencing some technical difficulties. Could you please call back in a few minutes?", connected: false },
     'ru-RU': { text: "Извините, у нас возникли технические неполадки. Не могли бы вы перезвонить через несколько минут?", connected: false },
@@ -33,134 +23,112 @@ const FEEDBACK_FALLBACKS: { [key: string]: Feedback } = {
 };
 
 
-// This new function calls the Gemini API to get a dynamic initial greeting.
-export async function getInitialGreeting(scenario: Scenario, language: string): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const model = 'gemini-2.5-flash';
-  
-  const instruction = `You are an AI role-playing as a gatekeeper for a company.
-Your persona: "${scenario.gatekeeperPersona}".
-Your company: "${scenario.companyProfile}".
-Your task is to generate the very first line you would say when answering the phone. It must be a professional, realistic greeting.
-The greeting must be in this language: ${language}.
-Your entire output must be a single, valid JSON object with one key: "greeting".
-Example format: {"greeting": "Good morning, Fresh Veggies Inc."}`;
-
-  try {
-    const response = await ai.models.generateContent({
-      model,
-      contents: instruction,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            greeting: { type: Type.STRING },
-          },
-          required: ['greeting'],
-        },
-      },
-    });
-
-    const jsonString = response.text;
-    const responseObject = JSON.parse(jsonString);
-    return responseObject.greeting;
-
-  } catch (error) {
-    console.error("Error calling Gemini API for initial greeting:", error);
-    if (error instanceof Error && error.message.includes("Requested entity was not found.")) {
-        window.dispatchEvent(new Event('apiKeyInvalid'));
-    }
-    return GREETING_FALLBACKS[language] || GREETING_FALLBACKS['en-US'];
+// --- Audio Helper Functions for Live API ---
+export function decode(base64: string) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
   }
+  return bytes;
+}
+
+export async function decodeAudioData(
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number,
+  numChannels: number,
+): Promise<AudioBuffer> {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length / numChannels;
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+    }
+  }
+  return buffer;
+}
+
+export function encode(bytes: Uint8Array): string {
+    let binary = '';
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+}
+
+export function createPcmBlob(data: Float32Array): Blob {
+    const l = data.length;
+    const int16 = new Int16Array(l);
+    for (let i = 0; i < l; i++) {
+        int16[i] = data[i] * 32768;
+    }
+    return {
+        data: encode(new Uint8Array(int16.buffer)),
+        mimeType: 'audio/pcm;rate=16000',
+    };
 }
 
 
-// This function calls the Gemini API to get a realistic gatekeeper response.
-export async function getGatekeeperResponse(scenario: Scenario, history: ChatMessage[], language:string): Promise<{ text: string, connected: boolean }> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const model = 'gemini-2.5-pro';
+// New function to manage the real-time voice session
+export function createLiveSession(
+    scenario: Scenario,
+    language: string,
+    callbacks: {
+        onmessage: (message: LiveServerMessage) => void;
+        onerror: (e: ErrorEvent) => void;
+        onclose: (e: CloseEvent) => void;
+        onopen: () => void;
+    }
+) {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-  const formattedHistory = history.map(msg => {
-    const role = msg.role === 'user' ? 'Caller' : 'You (Gatekeeper)';
-    return `${role}: ${msg.text}`;
-  }).join('\n\n');
+    const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper for a highly realistic, real-time voice sales training simulation. Your performance must be indistinguishable from a real, professional human.
 
-  // ARCHITECTURAL FIX 14.0: Monolithic Prompt for Maximum Reliability.
-  // The `systemInstruction` approach, while architecturally "pure", proved to be unstable for this
-  // complex, multi-lingual, JSON-constrained task. The root cause of the persistent failures was the
-  // cognitive load on the model from having to reconcile a separate, complex system prompt with the
-  // ongoing conversation and strict output format.
-  //
-  // This definitive fix reverts to a simpler, more robust monolithic prompt strategy. All context, rules,
-  // history, and instructions are provided in a single `contents` payload. This gives the model one
-  // clear, unambiguous, self-contained task, eliminating the context-switching that led to instability.
-  // Reliability is prioritized over architectural purity.
-  const monolithicPrompt = `You are a world-class AI, expertly role-playing a corporate gatekeeper for a highly realistic sales training simulation. Your performance must be indistinguishable from a real, professional human.
+    **//-- SCENARIO CONTEXT --//**
+    - **Your Persona:** "${scenario.gatekeeperPersona}"
+    - **Your Company:** You work for a company with this profile: "${scenario.companyProfile}"
+    - **Decision-Maker to Protect:** "${scenario.decisionMaker}"
+    - **Simulation Difficulty:** '${scenario.complexity}'
+    
+    **//-- CONVERSATIONAL RULES --//**
+    1.  **BE HUMAN:** Respond naturally and listen for interruptions. Your responses should be spoken in a professional tone.
+    2.  **NEVER VOLUNTEER INFORMATION:** Do not reveal the name of "${scenario.decisionMaker}" unless the caller mentions them first.
+    3.  **PROBE FOR CLARITY:** If the caller is vague, politely but firmly ask for specifics.
+    4.  **MAKE THE JUDGMENT CALL:** When the user provides a compelling, benefit-oriented reason, you must say you are connecting them, and then you MUST immediately use the 'connectCall' function. This is the ONLY way to end the simulation successfully. For all other cases, maintain the gate.
+    5.  **LANGUAGE:** You must speak only in this language: ${language}.`;
 
-**//-- SCENARIO CONTEXT --//**
-- **Your Persona:** "${scenario.gatekeeperPersona}"
-- **Your Company:** You work for a company with this profile: "${scenario.companyProfile}"
-- **Decision-Maker to Protect:** "${scenario.decisionMaker}"
-- **Simulation Difficulty:** '${scenario.complexity}'
 
-**//-- CONVERSATIONAL RULES --//**
-1.  **BE HUMAN:** Respond naturally to the flow of the conversation.
-2.  **NEVER VOLUNTEER INFORMATION:** Do not reveal the name of "${scenario.decisionMaker}" unless the caller mentions them first.
-3.  **PROBE FOR CLARITY:** If the caller is vague, politely but firmly ask for specifics.
-4.  **MAKE THE JUDGMENT CALL:**
-    - **Connect the Call (set "connected": true):** Only if the caller provides a specific, compelling, benefit-oriented reason for the call.
-    - **Maintain the Gate (set "connected": false):** For all other cases.
-
-**//-- CONVERSATION HISTORY --//**
-This is the conversation so far. Your turn is next.
-${formattedHistory}
-
-**//-- YOUR TASK --//**
-Based on all the rules and the conversation history, provide your next response.
-- Your **ENTIRE** output must be a single, valid JSON object.
-- The JSON must have EXACTLY two keys: "text" (your spoken response) and "connected" (a boolean).
-- All text in the "text" field must be in this language: **${language}**.
-
-Example of a valid output (remember to use the requested language for the "text" field):
-{
-  "text": "He is currently unavailable. May I ask what this is regarding?",
-  "connected": false
-}`;
-  
-  try {
-    const response = await ai.models.generateContent({
-      model,
-      contents: monolithicPrompt, 
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            text: { type: Type.STRING },
-            connected: { type: Type.BOOLEAN },
-          },
-          required: ['text', 'connected'],
-        },
+    const connectCallFunctionDeclaration: FunctionDeclaration = {
+      name: 'connectCall',
+      description: 'Use this function ONLY when you have decided to connect the user to the decision-maker.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {},
       },
+    };
+
+    const sessionPromise = ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        callbacks,
+        config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+            },
+            systemInstruction,
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+            tools: [{functionDeclarations: [connectCallFunctionDeclaration]}]
+        },
     });
 
-    // Defensive parsing: The model can sometimes wrap the JSON in markdown.
-    let jsonString = response.text.trim();
-    if (jsonString.startsWith('```json')) {
-      jsonString = jsonString.replace(/^```json\s*|```$/g, '');
-    }
-    
-    const responseObject = JSON.parse(jsonString);
-    return responseObject;
-
-  } catch (error) {
-    console.error("Error calling Gemini API for gatekeeper response:", error);
-    if (error instanceof Error && error.message.includes("Requested entity was not found.")) {
-        window.dispatchEvent(new Event('apiKeyInvalid'));
-    }
-    return RESPONSE_FALLBACKS[language] || RESPONSE_FALLBACKS['en-US'];
-  }
+    return sessionPromise;
 }
 
 
