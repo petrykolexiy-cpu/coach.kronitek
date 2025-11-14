@@ -1,8 +1,15 @@
-// FIX: Added a triple-slash directive to include Vite's client-side type definitions, which resolves TypeScript errors for `import.meta.env`.
-/// <reference types="vite/client" />
-
 import { GoogleGenAI, Type, LiveServerMessage, Modality, Blob, FunctionDeclaration } from "@google/genai";
 import { Scenario, ChatMessage, Feedback } from '../types';
+
+// FIX: Add type definition for import.meta.env to fix TypeScript errors
+// related to Vite environment variables when 'vite/client' types are not available.
+declare global {
+    interface ImportMeta {
+        readonly env: {
+            readonly VITE_API_KEY: string;
+        };
+    }
+}
 
 // Fallback messages translated for a better user experience
 const RESPONSE_FALLBACKS: { [key: string]: { text: string, connected: boolean } } = {

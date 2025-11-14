@@ -14,7 +14,7 @@ export const SCENARIOS: Scenario[] = [
     id: 'warm_follow_up_salad_co',
     title: 'Follow-up to a Trade Show Inquiry',
     description: 'Someone from their company downloaded a brochure from your virtual booth. Follow up to qualify the lead and set a meeting.',
-    gatekeeperPersona: 'A junior office manager, helpful but needs a clear reason to transfer the call. His name is Dmitry.',
+    gatekeeperPersona: 'A junior office manager, helpful but needs a clear reason to transfer the call. Her name is Monika.',
     decisionMaker: 'Chief Technologist, Anna Ivanovna',
     companyProfile: 'A growing company specializing in organic salad mixes. They are actively expanding and looking for innovative slicing technology.',
     complexity: 'easy',

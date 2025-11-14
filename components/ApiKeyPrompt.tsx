@@ -1,7 +1,14 @@
-// FIX: Added a triple-slash directive to include Vite's client-side type definitions, which resolves TypeScript errors for `import.meta.env`.
-/// <reference types="vite/client" />
-
 import React, { useState, useEffect, useCallback } from 'react';
+
+// FIX: Add type definition for import.meta.env to fix TypeScript errors
+// related to Vite environment variables when 'vite/client' types are not available.
+declare global {
+    interface ImportMeta {
+        readonly env: {
+            readonly VITE_API_KEY: string;
+        };
+    }
+}
 
 declare global {
   interface AIStudio {
