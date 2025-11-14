@@ -86,6 +86,8 @@ export function createLiveSession(
         onopen: () => void;
     }
 ) {
+    // FIX: Replaced import.meta.env.VITE_API_KEY with process.env.API_KEY
+    // to align with coding guidelines and resolve TypeScript errors.
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper for a highly realistic, real-time voice sales training simulation. Your performance must be indistinguishable from a real, professional human.
@@ -134,6 +136,8 @@ export function createLiveSession(
 
 // This function calls the Gemini API to get dynamic, personalized feedback at the end.
 export async function getPerformanceFeedback(scenario: Scenario, history: ChatMessage[], success: boolean, language: string): Promise<Feedback | null> {
+  // FIX: Replaced import.meta.env.VITE_API_KEY with process.env.API_KEY
+  // to align with coding guidelines and resolve TypeScript errors.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-pro';
   

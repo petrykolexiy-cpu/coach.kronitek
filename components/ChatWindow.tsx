@@ -27,6 +27,9 @@ const RobotIcon = () => (
     </svg>
 );
 
+// FIX: Modified the PhoneIcon component to accept and merge a `className` prop.
+// This allows for custom styling (like rotation) and resolves a TypeScript error
+// caused by passing an undeclared prop.
 const PhoneIcon = ({ className }: { className?: string }) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={`w-6 h-6 ${className || ''}`}>
       <path fillRule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.279-.087.431l4.108 7.552a.75.75 0 0 0 .914.315l1.46-1.095c.433-.325.954-.399 1.422-.195l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C6.55 22.5 1.5 17.45 1.5 9.75V7.5Zm17.08-2.625A7.5 7.5 0 0 0 9.75 1.5H7.5V3h2.25A6 6 0 0 1 18 9h1.5V6.75l-.92-.23Z" clipRule="evenodd" />
@@ -38,15 +41,6 @@ const GlobeIcon = () => (
       <path fillRule="evenodd" d="M9.483 2.262c.295-.14.629-.14.924 0l5.998 2.999a.75.75 0 0 1 .013 1.336l-1.88 1.056a11.91 11.91 0 0 1-2.043 1.08c-.14.072-.284.14-.43.204.058.21.112.422.162.636.196.834.34 1.685.43 2.559.076.73.076 1.463 0 2.193-.09.874-.234 1.725-.43 2.56a.75.75 0 0 1-1.352-.615c.18-.75.31-1.51.38-2.274a12.316 12.316 0 0 0 0-1.588c-.07-.764-.2-1.523-.38-2.274a.75.75 0 0 1 .52-1.026.75.75 0 0 1 1.025.52c.17.72.3 1.455.37 2.2.07.745.07 1.49 0 2.235-.088.88-.238 1.74-.44 2.58a.75.75 0 1 1-1.353-.615c.19-.79.33-1.6.41-2.41a10.823 10.823 0 0 0 0-1.972c-.08-.81-.22-1.62-.41-2.41a.75.75 0 0 1 .52-1.026.75.75 0 0 1 1.025.52c.18.75.31 1.51.38 2.274a12.316 12.316 0 0 0 0 1.588c-.07.764-.2 1.523-.38-2.274a.75.75 0 1 1-1.353-.615c-.14-.588-.31-1.17-.505-1.745a16.3 16.3 0 0 0-.435-1.185l-1.956-3.424a.75.75 0 0 1 .02-1.341l5.998-2.999ZM1.956 8.56A.75.75 0 0 1 3 8.25l1.98.02a13.42 13.42 0 0 1 2.23 1.394.75.75 0 0 1-.94 1.166 11.92 11.92 0 0 0-1.95-1.222l-2.04.02a.75.75 0 0 1-.275-1.068Z" clipRule="evenodd" />
     </svg>
 );
-
-const MicErrorIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-12 h-12 text-red-500 mx-auto">
-        <path d="M11.999 14.5c-1.38 0-2.5-1.12-2.5-2.5v-6c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v6c0 1.38-1.12 2.5-2.5 2.5Z" />
-        <path d="M17.3 12c0 3-2.54 5.1-5.3 5.1S6.7 15 6.7 12H5c0 3.41 2.72 6.23 6 6.72V22h2v-3.28c3.28-.49 6-3.31 6-6.72h-1.7Z" />
-        <path stroke="#FFF" stroke-linecap="round" stroke-width="1.5" d="m4.5 4.5 15 15" />
-    </svg>
-);
-
 
 const languages = [
   { code: 'en-US', name: 'English (US)' },
@@ -61,8 +55,6 @@ const languages = [
 export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setMessages, onEndSimulation, isReadOnly = false, selectedLang, onLangChange, onSuccess }) => {
   const [isLive, setIsLive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [micError, setMicError] = useState<string | null>(null);
-  const [errorTitle, setErrorTitle] = useState('Microphone Error');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Refs for managing the live session and audio
@@ -72,6 +64,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const audioPlaybackQueue = useRef<{ buffer: AudioBuffer; startTime: number }[]>([]);
   const nextStartTime = useRef(0);
   const audioSources = useRef(new Set<AudioBufferSourceNode>());
 
@@ -87,7 +80,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
   const cleanup = useCallback(() => {
     setIsLive(false);
     setIsConnecting(false);
-    // Do not clear micError here, so user can see the message.
 
     mediaStreamRef.current?.getTracks().forEach(track => track.stop());
     scriptProcessorRef.current?.disconnect();
@@ -125,38 +117,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
 
   const handleStartCall = async () => {
     setIsConnecting(true);
-    setMicError(null);
     setMessages([]);
 
-    let stream: MediaStream;
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStreamRef.current = stream;
-    } catch (error) {
-        console.error("Failed to get microphone access:", error);
-        setErrorTitle("Microphone Error");
-        let errorMessage = "An unexpected error occurred. Please try again.";
-        if (error instanceof Error) {
-            switch (error.name) {
-                case 'NotAllowedError':
-                    errorMessage = "Microphone access was denied. Please click the lock icon (🔒) in your address bar to allow microphone access for this site, then try again.";
-                    break;
-                case 'NotFoundError':
-                    errorMessage = "No microphone found. Please make sure your microphone is properly connected and recognized by your system.";
-                    break;
-                case 'NotReadableError':
-                    errorMessage = "Cannot access the microphone. It might be in use by another application (e.g., Zoom, Skype). Please close any other applications using the microphone and click 'Retry'.";
-                    break;
-                default:
-                     errorMessage = `An unknown microphone error occurred: ${error.message}. Please check your hardware and browser settings.`;
-            }
-        }
-        setMicError(errorMessage);
-        setIsConnecting(false);
-        return;
-    }
 
-    try {
+        // FIX: Replaced direct usage of `window.webkitAudioContext` with a polyfill-style
+        // variable and a type assertion. This resolves a TypeScript error where the prefixed
+        // version is not in the standard type definitions and ensures audio works on older browsers.
         const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
         const inputCtx = new AudioContext({ sampleRate: 16000 });
         const outputCtx = new AudioContext({ sampleRate: 24000 });
@@ -240,28 +209,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         });
         sessionPromiseRef.current = sessionPromise;
     } catch (error) {
-        console.error("Failed to start Gemini Live session:", error);
-        let errorMessage = "An unexpected error occurred while connecting to the AI. Please try again.";
-        if (error instanceof Error) {
-             if (error.message.includes("API Key")) {
-                setErrorTitle("API Key Error");
-                errorMessage = "Connection failed: The API Key is missing or was not set correctly. You will be returned to the API key selection screen.";
-                window.dispatchEvent(new Event('apiKeyInvalid'));
-             } else {
-                setErrorTitle("Connection Error");
-                errorMessage = `A connection error occurred: ${error.message}. Please try again.`;
-             }
-        }
-        setMicError(errorMessage);
+        console.error("Failed to start call:", error);
+        alert("Could not access microphone. Please check permissions and try again.");
         cleanup();
     }
   };
 
   useEffect(() => {
     return () => {
-        handleStopCall();
+        cleanup();
     };
-  }, [handleStopCall]);
+  }, [cleanup]);
 
   const callInProgress = isLive || isConnecting;
 
@@ -286,7 +244,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                  {msg.role === 'user' && <div className="flex-shrink-0 bg-blue-600 text-white rounded-full p-2"><UserIcon /></div>}
               </div>
           ))}
-          {!isLive && messages.length === 0 && !isConnecting && !micError && (
+          {!isLive && messages.length === 0 && !isConnecting && (
               <div className="text-center text-slate-400 p-8">
                   <p>Press "Start Live Call" to begin the simulation.</p>
               </div>
@@ -299,21 +257,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                     <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse"></div>
                </div>
                <p className="text-slate-400">Connecting...</p>
-            </div>
-          )}
-          {micError && (
-            <div className="text-center text-slate-300 p-8 bg-slate-900/50 rounded-lg">
-                <MicErrorIcon />
-                <h3 className="text-xl font-semibold mt-4 text-white">{errorTitle}</h3>
-                <p className="mt-2">{micError}</p>
-                {!errorTitle.includes("API Key") && (
-                  <button
-                      onClick={handleStartCall}
-                      className="mt-6 px-4 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 transition-colors"
-                  >
-                      Retry
-                  </button>
-                )}
             </div>
           )}
           <div ref={messagesEndRef} />
