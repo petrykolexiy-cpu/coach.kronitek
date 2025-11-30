@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { ChatMessage, Scenario } from '../types';
-import { createLiveSession, decode, decodeAudioData, createPcmBlob } from '../services/geminiService';
+import { ChatMessage, Scenario, MediaBlob } from '../types';
+import { createLiveSession, decode, decodeAudioData } from '../services/geminiService';
 import { LiveServerMessage, LiveSession } from '@google/genai';
 
 interface ChatWindowProps {
@@ -27,9 +27,6 @@ const RobotIcon = () => (
     </svg>
 );
 
-// FIX: Modified the PhoneIcon component to accept and merge a `className` prop.
-// This allows for custom styling (like rotation) and resolves a TypeScript error
-// caused by passing an undeclared prop.
 const PhoneIcon = ({ className }: { className?: string }) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={`w-6 h-6 ${className || ''}`}>
       <path fillRule="evenodd" d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.279-.087.431l4.108 7.552a.75.75 0 0 0 .914.315l1.46-1.095c.433-.325.954-.399 1.422-.195l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C6.55 22.5 1.5 17.45 1.5 9.75V7.5Zm17.08-2.625A7.5 7.5 0 0 0 9.75 1.5H7.5V3h2.25A6 6 0 0 1 18 9h1.5V6.75l-.92-.23Z" clipRule="evenodd" />
@@ -59,21 +56,89 @@ const languages = [
   { code: 'fil-PH', name: 'Filipino' },
 ];
 
+// This AudioWorklet processor is defined as a string and loaded via a Blob URL.
+// This is the standard way to use AudioWorklets without needing a separate file.
+const audioProcessorString = `
+class AudioProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    // Buffer audio for 100ms. At 16000Hz, this is 1600 samples.
+    // The process method is typically called with 128 samples at a time.
+    this.bufferSize = 1600; 
+    this.buffer = new Float32Array(this.bufferSize);
+    this.bufferIndex = 0;
+  }
+
+  // Base64 encoding function inside the worklet for self-containment.
+  encode(bytes) {
+    let binary = '';
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    if (input && input.length > 0) {
+      const inputChannel = input[0];
+
+      if (inputChannel) {
+        // Append new data to the buffer
+        const remainingSpace = this.bufferSize - this.bufferIndex;
+        const amountToCopy = Math.min(inputChannel.length, remainingSpace);
+        this.buffer.set(inputChannel.subarray(0, amountToCopy), this.bufferIndex);
+        this.bufferIndex += amountToCopy;
+
+        // If buffer is full, process and send it
+        if (this.bufferIndex >= this.bufferSize) {
+          // Convert Float32Array to Int16Array
+          const int16 = new Int16Array(this.bufferSize);
+          for (let i = 0; i < this.bufferSize; i++) {
+            int16[i] = Math.max(-1, Math.min(1, this.buffer[i])) * 32767;
+          }
+
+          // Base64 encode and post to the main thread
+          const base64 = this.encode(new Uint8Array(int16.buffer));
+          this.port.postMessage({
+            data: base64,
+            mimeType: 'audio/pcm;rate=16000',
+          });
+
+          // Reset buffer and handle any leftover data from the input
+          this.bufferIndex = 0;
+          const leftover = inputChannel.length - amountToCopy;
+          if (leftover > 0) {
+             this.buffer.set(inputChannel.subarray(amountToCopy), 0);
+             this.bufferIndex = leftover;
+          }
+        }
+      }
+    }
+    // Keep the processor alive
+    return true;
+  }
+}
+
+registerProcessor('audio-processor', AudioProcessor);
+`;
+
 export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setMessages, onEndSimulation, isReadOnly = false, selectedLang, onLangChange, onSuccess }) => {
   const [isLive, setIsLive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Refs for managing the live session and audio
   const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
   const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const nextStartTime = useRef(0);
   const audioSources = useRef(new Set<AudioBufferSourceNode>());
+  const workletUrlRef = useRef<string | null>(null);
 
   const currentInputTranscriptionRef = useRef('');
   const currentOutputTranscriptionRef = useRef('');
@@ -89,7 +154,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
     setIsConnecting(false);
 
     mediaStreamRef.current?.getTracks().forEach(track => track.stop());
-    scriptProcessorRef.current?.disconnect();
+    audioWorkletNodeRef.current?.disconnect();
     mediaStreamSourceRef.current?.disconnect();
     
     if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
@@ -98,11 +163,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
     audioSources.current.forEach(source => source.stop());
     audioSources.current.clear();
     
+    if (workletUrlRef.current) {
+        URL.revokeObjectURL(workletUrlRef.current);
+        workletUrlRef.current = null;
+    }
+
     sessionPromiseRef.current = null;
     inputAudioContextRef.current = null;
     outputAudioContextRef.current = null;
     mediaStreamRef.current = null;
-    scriptProcessorRef.current = null;
+    audioWorkletNodeRef.current = null;
     mediaStreamSourceRef.current = null;
   }, []);
 
@@ -135,16 +205,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         const inputCtx = new AudioContext({ sampleRate: 16000 });
         const outputCtx = new AudioContext({ sampleRate: 24000 });
         
-        if (inputCtx.state === 'suspended') {
-            await inputCtx.resume();
-        }
-        if (outputCtx.state === 'suspended') {
-            await outputCtx.resume();
-        }
+        await Promise.all([inputCtx.resume(), outputCtx.resume()]);
         
         inputAudioContextRef.current = inputCtx;
         outputAudioContextRef.current = outputCtx;
         nextStartTime.current = 0;
+
+        const workletBlob = new Blob([audioProcessorString], { type: 'application/javascript' });
+        const workletUrl = URL.createObjectURL(workletBlob);
+        workletUrlRef.current = workletUrl;
+        await inputCtx.audioWorklet.addModule(workletUrl);
 
         const sessionPromise = createLiveSession(scenario, selectedLang, {
             onopen: () => {
@@ -155,19 +225,22 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                 const source = inputCtx.createMediaStreamSource(stream);
                 mediaStreamSourceRef.current = source;
                 
-                const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
-                scriptProcessorRef.current = scriptProcessor;
+                const audioWorkletNode = new AudioWorkletNode(inputCtx, 'audio-processor');
+                audioWorkletNodeRef.current = audioWorkletNode;
 
-                scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                    const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-                    const pcmBlob = createPcmBlob(inputData);
+                audioWorkletNode.port.onmessage = (event) => {
+                    const pcmBlob: MediaBlob = event.data;
                     sessionPromiseRef.current?.then((session) => {
                         session.sendRealtimeInput({ media: pcmBlob });
                     });
                 };
 
-                source.connect(scriptProcessor);
-                scriptProcessor.connect(inputCtx.destination);
+                const muteNode = inputCtx.createGain();
+                muteNode.gain.setValueAtTime(0, inputCtx.currentTime);
+
+                source.connect(audioWorkletNode);
+                audioWorkletNode.connect(muteNode);
+                muteNode.connect(inputCtx.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
                 if (message.toolCall) {
@@ -203,13 +276,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                 if (base64Audio) {
                     const audioBuffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000, 1);
                     nextStartTime.current = Math.max(nextStartTime.current, outputCtx.currentTime);
-                    const source = outputCtx.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(outputCtx.destination);
-                    source.start(nextStartTime.current);
+                    const sourceNode = outputCtx.createBufferSource();
+                    sourceNode.buffer = audioBuffer;
+                    sourceNode.connect(outputCtx.destination);
+                    sourceNode.start(nextStartTime.current);
                     nextStartTime.current += audioBuffer.duration;
-                    audioSources.current.add(source);
-                    source.onended = () => audioSources.current.delete(source);
+                    audioSources.current.add(sourceNode);
+                    sourceNode.onended = () => audioSources.current.delete(sourceNode);
                 }
             },
             onclose: () => {
@@ -239,9 +312,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
 
   useEffect(() => {
     return () => {
-        cleanup();
+        handleStopCall();
     };
-  }, [cleanup]);
+  }, [handleStopCall]);
 
   const callInProgress = isLive || isConnecting;
 
