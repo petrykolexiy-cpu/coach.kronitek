@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, LiveServerMessage, Modality, FunctionDeclaration } from "@google/genai";
-import { Scenario, ChatMessage, Feedback } from '../types';
+import { Scenario, ChatMessage, Feedback, MediaBlob } from '../types';
 
 // FIX: Add type definition for import.meta.env to fix TypeScript errors
 // related to Vite environment variables when 'vite/client' types are not available.
@@ -34,6 +34,51 @@ const FEEDBACK_FALLBACKS: { [key: string]: Feedback } = {
 
 
 // --- Audio Helper Functions for Live API ---
+
+// Base64 encoding function, necessary for preparing audio for the API.
+function encode(bytes: Uint8Array): string {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// This helper function concatenates multiple Float32Array chunks into a single array.
+// This is a key part of the buffering strategy to process audio in larger batches.
+export function concatenateFloat32Arrays(arrays: Float32Array[]): Float32Array {
+    let totalLength = 0;
+    for (const arr of arrays) {
+        totalLength += arr.length;
+    }
+    const result = new Float32Array(totalLength);
+    let offset = 0;
+    for (const arr of arrays) {
+        result.set(arr, offset);
+        offset += arr.length;
+    }
+    return result;
+}
+
+// This helper function takes the raw Float32Array audio data,
+// converts it to 16-bit PCM, and then Base64 encodes it.
+export function createPcmBlob(data: Float32Array): MediaBlob {
+  const l = data.length;
+  const int16 = new Int16Array(l);
+  // Convert float to 16-bit signed integer
+  for (let i = 0; i < l; i++) {
+    // Clamping the value to be between -1 and 1 before conversion
+    int16[i] = Math.max(-1, Math.min(1, data[i])) * 32767;
+  }
+  return {
+    data: encode(new Uint8Array(int16.buffer)),
+    // The API requires a 16000Hz sample rate.
+    mimeType: 'audio/pcm;rate=16000',
+  };
+}
+
+
 export function decode(base64: string) {
   const binaryString = atob(base64);
   const len = binaryString.length;
