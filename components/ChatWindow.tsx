@@ -148,10 +148,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         outputAudioContextRef.current = outputCtx;
         nextStartTime.current = 0;
         
-        // FIX: Implemented audio buffering within the AudioWorklet. This processor now
-        // collects 100ms of audio data before sending it as a single message. This
-        // dramatically reduces message frequency (from 125/sec to 10/sec), preventing
-        // a data bottleneck that caused the app to not "hear" the user.
         const workletCode = `
           class AudioProcessor extends AudioWorkletProcessor {
             constructor() {
@@ -217,14 +213,22 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                 const source = inputCtx.createMediaStreamSource(stream);
                 mediaStreamSourceRef.current = source;
                 
+                // FIX: Inserted a muted GainNode to create a stable, feedback-free audio graph.
+                // This ensures the browser actively processes the microphone audio without routing it
+                // to the speakers, which could cause a feedback loop and halt audio processing.
+                const gainNode = inputCtx.createGain();
+                gainNode.gain.value = 0;
+
                 workletNode.port.onmessage = (event) => {
                     const pcmBlob = event.data as MediaBlob;
                     sessionPromiseRef.current?.then((session) => {
                         session.sendRealtimeInput({ media: pcmBlob });
                     });
                 };
+
                 source.connect(workletNode);
-                workletNode.connect(inputCtx.destination);
+                workletNode.connect(gainNode);
+                gainNode.connect(inputCtx.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
                 if (message.toolCall) {
