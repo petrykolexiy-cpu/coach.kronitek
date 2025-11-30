@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Scenario, ChatMessage, Feedback } from './types';
 import { getPerformanceFeedback } from './services/geminiService';
@@ -77,7 +76,7 @@ const App: React.FC = () => {
   };
   
   const showFeedbackPanel = isLoadingFeedback || !!feedback;
-  const isChatReadOnly = isLoadingFeedback || !!feedback || isSimulationSuccess;
+  const isChatReadOnly = isLoadingFeedback || !!feedback;
 
   return (
     <ApiKeyPrompt>

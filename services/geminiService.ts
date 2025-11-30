@@ -186,9 +186,7 @@ export async function getPerformanceFeedback(scenario: Scenario, history: ChatMe
 
   // A simplified prompt that focuses on the task, not the format.
   // This prevents conflicts between the prompt and the responseSchema.
-  const monolithicPrompt = `You are an expert AI sales coach. Your task is to provide an objective, constructive, and actionable performance analysis for a sales manager based on the provided simulation data.
-Even for very short conversations, provide a full analysis with a low score and feedback explaining the user's failure to engage the gatekeeper.
-All of your analysis and text MUST be in the following language: ${language}.
+  const monolithicPrompt = `As an expert AI sales coach, analyze the following simulation data. Provide objective, constructive, and actionable performance feedback. All text must be in ${language}.
 
 **//-- SIMULATION DATA --//**
 
