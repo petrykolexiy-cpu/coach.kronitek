@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { ChatMessage, Scenario, MediaBlob } from '../types';
-import { createLiveSession, decode, decodeAudioData } from '../services/geminiService';
+import { ChatMessage, Scenario } from '../types';
+import { createLiveSession, decode, decodeAudioData, createPcmBlob } from '../services/geminiService';
 import { LiveServerMessage, LiveSession } from '@google/genai';
 
 interface ChatWindowProps {
@@ -70,9 +70,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const audioPlaybackQueue = useRef<{ buffer: AudioBuffer; startTime: number }[]>([]);
   const nextStartTime = useRef(0);
   const audioSources = useRef(new Set<AudioBufferSourceNode>());
 
@@ -90,8 +89,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
     setIsConnecting(false);
 
     mediaStreamRef.current?.getTracks().forEach(track => track.stop());
-    audioWorkletNodeRef.current?.port.close();
-    audioWorkletNodeRef.current?.disconnect();
+    scriptProcessorRef.current?.disconnect();
     mediaStreamSourceRef.current?.disconnect();
     
     if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
@@ -104,7 +102,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
     inputAudioContextRef.current = null;
     outputAudioContextRef.current = null;
     mediaStreamRef.current = null;
-    audioWorkletNodeRef.current = null;
+    scriptProcessorRef.current = null;
     mediaStreamSourceRef.current = null;
   }, []);
 
@@ -147,62 +145,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         inputAudioContextRef.current = inputCtx;
         outputAudioContextRef.current = outputCtx;
         nextStartTime.current = 0;
-        
-        const workletCode = `
-          class AudioProcessor extends AudioWorkletProcessor {
-            constructor() {
-              super();
-              // Buffer for 100ms of audio at 16kHz (16000 * 0.1)
-              this.bufferSize = 1600; 
-              this.buffer = new Int16Array(this.bufferSize);
-              this.bufferIndex = 0;
-            }
-
-            encode(bytes) {
-              let binary = '';
-              const len = bytes.byteLength;
-              for (let i = 0; i < len; i++) {
-                binary += String.fromCharCode(bytes[i]);
-              }
-              return btoa(binary);
-            }
-
-            process(inputs) {
-              const inputChannel = inputs[0]?.[0];
-
-              if (inputChannel) {
-                for (let i = 0; i < inputChannel.length; i++) {
-                  this.buffer[this.bufferIndex++] = inputChannel[i] * 32768;
-
-                  if (this.bufferIndex === this.bufferSize) {
-                    const pcmBlob = {
-                      data: this.encode(new Uint8Array(this.buffer.buffer)),
-                      mimeType: 'audio/pcm;rate=16000',
-                    };
-                    this.port.postMessage(pcmBlob);
-                    this.bufferIndex = 0;
-                  }
-                }
-              }
-              return true;
-            }
-          }
-          registerProcessor('audio-processor', AudioProcessor);
-        `;
-        const blob = new Blob([workletCode], { type: 'application/javascript' });
-        const workletURL = URL.createObjectURL(blob);
-
-        try {
-            await inputCtx.audioWorklet.addModule(workletURL);
-        } catch (e) {
-            console.error("Error loading AudioWorklet module", e);
-            setMicError("Failed to initialize audio processor. Your browser may not support AudioWorklets. Please try a different browser.");
-            cleanup();
-            return;
-        }
-    
-        const workletNode = new AudioWorkletNode(inputCtx, 'audio-processor');
-        audioWorkletNodeRef.current = workletNode;
 
         const sessionPromise = createLiveSession(scenario, selectedLang, {
             onopen: () => {
@@ -213,22 +155,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                 const source = inputCtx.createMediaStreamSource(stream);
                 mediaStreamSourceRef.current = source;
                 
-                // FIX: Inserted a muted GainNode to create a stable, feedback-free audio graph.
-                // This ensures the browser actively processes the microphone audio without routing it
-                // to the speakers, which could cause a feedback loop and halt audio processing.
-                const gainNode = inputCtx.createGain();
-                gainNode.gain.value = 0;
+                const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
+                scriptProcessorRef.current = scriptProcessor;
 
-                workletNode.port.onmessage = (event) => {
-                    const pcmBlob = event.data as MediaBlob;
+                scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                    const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                    const pcmBlob = createPcmBlob(inputData);
                     sessionPromiseRef.current?.then((session) => {
                         session.sendRealtimeInput({ media: pcmBlob });
                     });
                 };
 
-                source.connect(workletNode);
-                workletNode.connect(gainNode);
-                gainNode.connect(inputCtx.destination);
+                source.connect(scriptProcessor);
+                scriptProcessor.connect(inputCtx.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
                 if (message.toolCall) {
