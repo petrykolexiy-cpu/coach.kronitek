@@ -209,6 +209,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                     });
                 };
                 source.connect(workletNode);
+                // FIX: Connect the worklet to the destination to ensure its `process` method is
+                // called by the browser's audio engine. Without this, the worklet remains idle,
+                // and no audio is ever processed or sent to the API.
+                workletNode.connect(inputCtx.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
                 if (message.toolCall) {
