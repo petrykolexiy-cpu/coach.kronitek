@@ -34,39 +34,38 @@ const App: React.FC = () => {
   }, []);
 
   const handleEndSimulation = useCallback(async () => {
-      // Guard against multiple calls
     if (!currentScenario || isLoadingFeedback) return;
     
     setIsLoadingFeedback(true);
     
-    // Use a function to derive the final message list to avoid stale state.
-    const getFinalMessages = (currentMessages: ChatMessage[]): ChatMessage[] => {
-        let updatedMessages = [...currentMessages];
-        if (isSimulationSuccess) {
-            const successText = SUCCESS_MESSAGES[selectedLang]?.(currentScenario.decisionMaker) || SUCCESS_MESSAGES['en-US'](currentScenario.decisionMaker);
-            // Ensure the success message isn't added multiple times
-            if (!updatedMessages.some(m => m.text === successText)) {
-                updatedMessages.push({ role: 'model', text: successText });
-            }
+    // Create a final, definitive list of messages for feedback analysis.
+    // This approach correctly captures the state *at the moment of ending*, including the success message.
+    const finalMessages = [...messages];
+    if (isSimulationSuccess) {
+        const successText = SUCCESS_MESSAGES[selectedLang]?.(currentScenario.decisionMaker) || SUCCESS_MESSAGES['en-US'](currentScenario.decisionMaker);
+        if (!finalMessages.some(m => m.text === successText)) {
+            finalMessages.push({ role: 'model', text: successText });
         }
-        return updatedMessages;
-    };
+    }
     
-    // We get the final list of messages but only update the state *after* the API call
-    // to prevent any race conditions. The API call receives the definitive final list.
-    const finalMessages = getFinalMessages(messages);
+    // Update the UI immediately with the final message list.
+    setMessages(finalMessages);
 
+    // Request feedback using this definitive message list.
     const performanceFeedback = await getPerformanceFeedback(currentScenario, finalMessages, isSimulationSuccess, selectedLang);
     
-    setMessages(finalMessages); // Now update the UI with the final state.
     setFeedback(performanceFeedback);
     setIsLoadingFeedback(false);
   }, [currentScenario, messages, isSimulationSuccess, selectedLang, isLoadingFeedback]);
 
 
   const handleSuccess = useCallback(() => {
-    setIsSimulationSuccess(true);
-  }, []);
+    if (currentScenario) {
+        const successText = SUCCESS_MESSAGES[selectedLang]?.(currentScenario.decisionMaker) || SUCCESS_MESSAGES['en-US'](currentScenario.decisionMaker);
+        setMessages(prev => [...prev, { role: 'model', text: successText }]);
+        setIsSimulationSuccess(true);
+    }
+  }, [currentScenario, selectedLang]);
 
 
   const handleRestart = () => {
