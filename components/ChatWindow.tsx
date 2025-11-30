@@ -133,16 +133,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStreamRef.current = stream;
 
-        // FIX: Replaced direct usage of `window.webkitAudioContext` with a polyfill-style
-        // variable and a type assertion. This resolves a TypeScript error where the prefixed
-        // version is not in the standard type definitions and ensures audio works on older browsers.
         const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
         const inputCtx = new AudioContext({ sampleRate: 16000 });
         const outputCtx = new AudioContext({ sampleRate: 24000 });
         
-        // FIX: Explicitly resume AudioContexts. Browsers may initialize them in a
-        // 'suspended' state, which would prevent any audio processing from occurring.
-        // Resuming them ensures the microphone input is captured and processed.
         if (inputCtx.state === 'suspended') {
             await inputCtx.resume();
         }
@@ -154,33 +148,45 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         outputAudioContextRef.current = outputCtx;
         nextStartTime.current = 0;
         
-        // FIX: Moved all audio encoding logic into the AudioWorklet. This offloads the expensive
-        // data conversion from the main UI thread to a background thread, preventing the app from
-        // freezing during long periods of continuous audio input.
+        // FIX: Implemented audio buffering within the AudioWorklet. This processor now
+        // collects 100ms of audio data before sending it as a single message. This
+        // dramatically reduces message frequency (from 125/sec to 10/sec), preventing
+        // a data bottleneck that caused the app to not "hear" the user.
         const workletCode = `
-          const encode = (bytes) => {
-            let binary = '';
-            const len = bytes.byteLength;
-            for (let i = 0; i < len; i++) {
-              binary += String.fromCharCode(bytes[i]);
-            }
-            return btoa(binary);
-          };
-
           class AudioProcessor extends AudioWorkletProcessor {
+            constructor() {
+              super();
+              // Buffer for 100ms of audio at 16kHz (16000 * 0.1)
+              this.bufferSize = 1600; 
+              this.buffer = new Int16Array(this.bufferSize);
+              this.bufferIndex = 0;
+            }
+
+            encode(bytes) {
+              let binary = '';
+              const len = bytes.byteLength;
+              for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(bytes[i]);
+              }
+              return btoa(binary);
+            }
+
             process(inputs) {
               const inputChannel = inputs[0]?.[0];
+
               if (inputChannel) {
-                const l = inputChannel.length;
-                const int16 = new Int16Array(l);
-                for (let i = 0; i < l; i++) {
-                  int16[i] = inputChannel[i] * 32768;
+                for (let i = 0; i < inputChannel.length; i++) {
+                  this.buffer[this.bufferIndex++] = inputChannel[i] * 32768;
+
+                  if (this.bufferIndex === this.bufferSize) {
+                    const pcmBlob = {
+                      data: this.encode(new Uint8Array(this.buffer.buffer)),
+                      mimeType: 'audio/pcm;rate=16000',
+                    };
+                    this.port.postMessage(pcmBlob);
+                    this.bufferIndex = 0;
+                  }
                 }
-                const pcmBlob = {
-                    data: encode(new Uint8Array(int16.buffer)),
-                    mimeType: 'audio/pcm;rate=16000',
-                };
-                this.port.postMessage(pcmBlob);
               }
               return true;
             }
@@ -211,8 +217,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                 const source = inputCtx.createMediaStreamSource(stream);
                 mediaStreamSourceRef.current = source;
                 
-                // FIX: The onmessage handler is now extremely lightweight. It just sends the
-                // pre-processed blob from the worklet, ensuring the main thread stays responsive.
                 workletNode.port.onmessage = (event) => {
                     const pcmBlob = event.data as MediaBlob;
                     sessionPromiseRef.current?.then((session) => {
@@ -220,9 +224,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                     });
                 };
                 source.connect(workletNode);
-                // FIX: Connect the worklet to the destination to ensure its `process` method is
-                // called by the browser's audio engine. Without this, the worklet remains idle,
-                // and no audio is ever processed or sent to the API.
                 workletNode.connect(inputCtx.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
@@ -404,7 +405,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
        
          <button
             onClick={() => handleStopCall(true)}
-            className="w-full mt-2 px-4 py-2 bg-rose-600 text-white rounded-md font-semibold hover:bg-rose-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors"
+            className="w-full mt-2 px-4 py-2 bg-slate-600 text-slate-200 rounded-md font-semibold hover:bg-slate-500 disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors"
             disabled={isConnecting || isReadOnly || messages.length === 0}
           >
             End & Get Feedback
