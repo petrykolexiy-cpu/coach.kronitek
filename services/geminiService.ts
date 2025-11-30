@@ -178,7 +178,7 @@ export async function getPerformanceFeedback(scenario: Scenario, history: ChatMe
   // FIX: Reverted to using `import.meta.env.VITE_API_KEY` which is the correct way
   // to access environment variables in a client-side Vite application.
   const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY });
-  const model = 'gemini-2.5-flash';
+  const model = 'gemini-3-pro-preview';
   
   // A more readable format for the AI to analyze.
   const formattedHistory = history.map(msg => `${msg.role === 'user' ? 'Sales Manager' : 'Gatekeeper'}: ${msg.text}`).join('\n');
@@ -187,6 +187,7 @@ export async function getPerformanceFeedback(scenario: Scenario, history: ChatMe
   // A simplified prompt that focuses on the task, not the format.
   // This prevents conflicts between the prompt and the responseSchema.
   const monolithicPrompt = `You are an expert AI sales coach. Your task is to provide an objective, constructive, and actionable performance analysis for a sales manager based on the provided simulation data.
+Even for very short conversations, provide a full analysis with a low score and feedback explaining the user's failure to engage the gatekeeper.
 All of your analysis and text MUST be in the following language: ${language}.
 
 **//-- SIMULATION DATA --//**
