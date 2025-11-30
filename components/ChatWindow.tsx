@@ -138,6 +138,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
   const currentInputTranscriptionRef = useRef('');
   const currentOutputTranscriptionRef = useRef('');
 
+  // Create a ref to hold the latest version of onEndSimulation to prevent stale closures
+  const onEndSimulationRef = useRef(onEndSimulation);
+  useEffect(() => {
+    onEndSimulationRef.current = onEndSimulation;
+  }, [onEndSimulation]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -178,9 +184,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
     }
     cleanup();
     if (andEndSimulation) {
-        onEndSimulation();
+        onEndSimulationRef.current();
     }
-  }, [cleanup, onEndSimulation]);
+  }, [cleanup]);
 
 
   const handleStartCall = async () => {
@@ -306,8 +312,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
   };
 
   useEffect(() => {
+    // This effect now correctly runs its cleanup function ONLY when the component unmounts.
+    // The handleStopCall function is stable due to useCallback and the ref pattern,
+    // preventing the premature session termination that was causing the application to fail.
     return () => {
-        handleStopCall();
+        handleStopCall(false);
     };
   }, [handleStopCall]);
 
