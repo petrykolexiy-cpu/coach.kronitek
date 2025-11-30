@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, LiveServerMessage, Modality, Blob, FunctionDeclaration } from "@google/genai";
+import { GoogleGenAI, Type, LiveServerMessage, Modality, FunctionDeclaration } from "@google/genai";
 import { Scenario, ChatMessage, Feedback } from '../types';
 
 // FIX: Add type definition for import.meta.env to fix TypeScript errors
@@ -62,28 +62,6 @@ export async function decodeAudioData(
   }
   return buffer;
 }
-
-export function encode(bytes: Uint8Array): string {
-    let binary = '';
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-}
-
-export function createPcmBlob(data: Float32Array): Blob {
-    const l = data.length;
-    const int16 = new Int16Array(l);
-    for (let i = 0; i < l; i++) {
-        int16[i] = data[i] * 32768;
-    }
-    return {
-        data: encode(new Uint8Array(int16.buffer)),
-        mimeType: 'audio/pcm;rate=16000',
-    };
-}
-
 
 // New function to manage the real-time voice session
 export function createLiveSession(

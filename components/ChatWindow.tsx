@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { ChatMessage, Scenario } from '../types';
-import { createLiveSession, decode, decodeAudioData, createPcmBlob } from '../services/geminiService';
+import { ChatMessage, Scenario, MediaBlob } from '../types';
+import { createLiveSession, decode, decodeAudioData } from '../services/geminiService';
 import { LiveServerMessage, LiveSession } from '@google/genai';
 
 interface ChatWindowProps {
@@ -143,12 +143,33 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         outputAudioContextRef.current = outputCtx;
         nextStartTime.current = 0;
         
+        // FIX: Moved all audio encoding logic into the AudioWorklet. This offloads the expensive
+        // data conversion from the main UI thread to a background thread, preventing the app from
+        // freezing during long periods of continuous audio input.
         const workletCode = `
+          const encode = (bytes) => {
+            let binary = '';
+            const len = bytes.byteLength;
+            for (let i = 0; i < len; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+          };
+
           class AudioProcessor extends AudioWorkletProcessor {
             process(inputs) {
               const inputChannel = inputs[0]?.[0];
               if (inputChannel) {
-                this.port.postMessage(inputChannel.slice(0));
+                const l = inputChannel.length;
+                const int16 = new Int16Array(l);
+                for (let i = 0; i < l; i++) {
+                  int16[i] = inputChannel[i] * 32768;
+                }
+                const pcmBlob = {
+                    data: encode(new Uint8Array(int16.buffer)),
+                    mimeType: 'audio/pcm;rate=16000',
+                };
+                this.port.postMessage(pcmBlob);
               }
               return true;
             }
@@ -179,15 +200,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
                 const source = inputCtx.createMediaStreamSource(stream);
                 mediaStreamSourceRef.current = source;
                 
+                // FIX: The onmessage handler is now extremely lightweight. It just sends the
+                // pre-processed blob from the worklet, ensuring the main thread stays responsive.
                 workletNode.port.onmessage = (event) => {
-                    const inputData = event.data as Float32Array;
-                    const pcmBlob = createPcmBlob(inputData);
+                    const pcmBlob = event.data as MediaBlob;
                     sessionPromiseRef.current?.then((session) => {
                         session.sendRealtimeInput({ media: pcmBlob });
                     });
                 };
                 source.connect(workletNode);
-                workletNode.connect(inputCtx.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
                 if (message.toolCall) {
