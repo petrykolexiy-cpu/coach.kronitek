@@ -178,7 +178,7 @@ export async function getPerformanceFeedback(scenario: Scenario, history: ChatMe
   // FIX: Reverted to using `import.meta.env.VITE_API_KEY` which is the correct way
   // to access environment variables in a client-side Vite application.
   const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY });
-  const model = 'gemini-3-pro-preview';
+  const model = 'gemini-2.5-flash';
   
   // A more readable format for the AI to analyze.
   const formattedHistory = history.map(msg => `${msg.role === 'user' ? 'Sales Manager' : 'Gatekeeper'}: ${msg.text}`).join('\n');
