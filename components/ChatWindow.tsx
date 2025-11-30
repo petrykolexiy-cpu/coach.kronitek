@@ -1,7 +1,15 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ChatMessage, Scenario, MediaBlob } from '../types';
 import { createLiveSession, decode, decodeAudioData } from '../services/geminiService';
-import { LiveServerMessage, LiveSession } from '@google/genai';
+// FIX: Replaced non-existent 'LiveSession' type with 'Connection' from the '@google/genai' package
+// to correctly type the live session object.
+import { LiveServerMessage, Connection } from '@google/genai';
+
+// FIX: Add type definition for 'window.webkitAudioContext' to support older Safari versions
+// and resolve TypeScript errors. This is necessary for cross-browser compatibility.
+interface Window {
+    webkitAudioContext: typeof AudioContext;
+}
 
 // This is the complete, self-contained audio processing engine that runs in a separate background thread.
 // It handles buffering, PCM conversion, and Base64 encoding, ensuring the main UI thread never freezes.
@@ -101,4 +109,256 @@ const GlobeIcon = () => (
 
 const MicrophoneSlashIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-12 h-12 text-red-500">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75v3.75c0 1.98-1.529 3.599-3.499 3.841M12 12.75V15m0 6.75V15m0 0H9.75m0 0A4.5 4.5 0 0 1 5.25 15v-3.75m0 0v-3.75A4.5 4.5 0 0 1 9.7
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75v3.75c0 1.98-1.529 3.599-3.499 3.841M12 12.75V15m0 6.75V15m0 0H9.75m0 0A4.5 4.5 0 0 1 5.25 15v-3.75m0 0v-3.75A4.5 4.5 0 0 1 9.75 3.75M12 15V7.5m0 0v-3.75a4.5 4.5 0 0 1 4.5-4.5v3.75m-4.5 0h.008M12 15h.008m-4.492-3.75h.008m-3.75 0h.008m6.75 0h.008m-3.75 0h.008M12 3.75h.008m-4.492 0h.008m-3.75 0h.008m6.75 0h.008m-3.75 0h.008m11.25 3.75-6-6m6 6-6-6" />
+    </svg>
+);
+
+
+export const ChatWindow: React.FC<ChatWindowProps> = ({
+    scenario,
+    messages,
+    setMessages,
+    onEndSimulation,
+    isReadOnly,
+    selectedLang,
+    onLangChange,
+    onSuccess,
+}) => {
+    const [isLive, setIsLive] = useState(false);
+    const [isConnecting, setIsConnecting] = useState(false);
+    const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
+
+    const liveSessionRef = useRef<Connection | null>(null);
+    const inputAudioContextRef = useRef<AudioContext | null>(null);
+    const outputAudioContextRef = useRef<AudioContext | null>(null);
+    const mediaStreamRef = useRef<MediaStream | null>(null);
+    const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+    const nextStartTimeRef = useRef(0);
+    const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+    const currentInputTranscriptionRef = useRef('');
+    const currentOutputTranscriptionRef = useRef('');
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    const onSuccessRef = useRef(onSuccess);
+    useEffect(() => { onSuccessRef.current = onSuccess; }, [onSuccess]);
+
+    const onEndSimulationRef = useRef(onEndSimulation);
+    useEffect(() => { onEndSimulationRef.current = onEndSimulation; }, [onEndSimulation]);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    const handleStopCall = useCallback(() => {
+        liveSessionRef.current?.close();
+        mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+        workletNodeRef.current?.port.close();
+        workletNodeRef.current?.disconnect();
+        
+        if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
+        if (outputAudioContextRef.current?.state !== 'closed') outputAudioContextRef.current?.close();
+
+        audioSourcesRef.current.forEach(source => source.stop());
+        audioSourcesRef.current.clear();
+        
+        liveSessionRef.current = null;
+        mediaStreamRef.current = null;
+        workletNodeRef.current = null;
+        inputAudioContextRef.current = null;
+        outputAudioContextRef.current = null;
+        nextStartTimeRef.current = 0;
+
+        setIsLive(false);
+        setIsConnecting(false);
+    }, []);
+
+    const onmessage = useCallback(async (message: LiveServerMessage) => {
+        if (message.toolCall?.functionCalls?.[0]?.name === 'connectCall') {
+            onSuccessRef.current();
+            handleStopCall();
+            return;
+        }
+
+        if (message.serverContent?.outputTranscription) {
+            currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
+        }
+        if (message.serverContent?.inputTranscription) {
+            currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
+        }
+
+        if (message.serverContent?.turnComplete) {
+            const finalInput = currentInputTranscriptionRef.current.trim();
+            const finalOutput = currentOutputTranscriptionRef.current.trim();
+            currentInputTranscriptionRef.current = '';
+            currentOutputTranscriptionRef.current = '';
+
+            const newMessages: ChatMessage[] = [];
+            if (finalInput) newMessages.push({ role: 'user', text: finalInput });
+            if (finalOutput) newMessages.push({ role: 'model', text: finalOutput });
+
+            if (newMessages.length > 0) {
+                setMessages(prev => [...prev, ...newMessages]);
+            }
+        }
+
+        const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+        const outCtx = outputAudioContextRef.current;
+        if (base64Audio && outCtx) {
+            const audioBuffer = await decodeAudioData(decode(base64Audio), outCtx, 24000, 1);
+            nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outCtx.currentTime);
+            const source = outCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(outCtx.destination);
+            source.addEventListener('ended', () => audioSourcesRef.current.delete(source));
+            audioSourcesRef.current.add(source);
+            source.start(nextStartTimeRef.current);
+            nextStartTimeRef.current += audioBuffer.duration;
+        }
+    }, [setMessages, handleStopCall]);
+
+    const handleStartCall = useCallback(async () => {
+        if (isLive || isConnecting) return;
+        setIsConnecting(true);
+        setMicPermission('prompt');
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaStreamRef.current = stream;
+            setMicPermission('granted');
+
+            const inCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            const outCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+            inputAudioContextRef.current = inCtx;
+            outputAudioContextRef.current = outCtx;
+            await Promise.all([inCtx.resume(), outCtx.resume()]);
+
+            const workletURL = URL.createObjectURL(new Blob([audioProcessorWorkletString], { type: 'application/javascript' }));
+            await inCtx.audioWorklet.addModule(workletURL);
+            URL.revokeObjectURL(workletURL);
+
+            const source = inCtx.createMediaStreamSource(stream);
+            const workletNode = new AudioWorkletNode(inCtx, 'audio-processor');
+            workletNodeRef.current = workletNode;
+            const muteNode = inCtx.createGain();
+            muteNode.gain.value = 0;
+            source.connect(workletNode).connect(muteNode).connect(inCtx.destination);
+            
+            const session = await createLiveSession(scenario, messages, selectedLang, {
+                onopen: () => { setIsConnecting(false); setIsLive(true); },
+                onmessage,
+                onerror: (e) => { console.error("Session error:", e); handleStopCall(); },
+                onclose: () => { console.log("Session closed."); handleStopCall(); },
+            });
+
+            liveSessionRef.current = session;
+            workletNode.port.onmessage = (event) => {
+                session.sendRealtimeInput({ media: event.data as MediaBlob });
+            };
+        } catch (err) {
+            console.error("Failed to start call:", err);
+            if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
+                setMicPermission('denied');
+            }
+            handleStopCall();
+        }
+    }, [isLive, isConnecting, scenario, messages, selectedLang, onmessage, handleStopCall]);
+
+    useEffect(() => {
+        return () => {
+            handleStopCall();
+        };
+    }, [handleStopCall]);
+
+    const handleEndAndFeedback = () => {
+        handleStopCall();
+        onEndSimulationRef.current();
+    };
+
+    const callButtonDisabled = isConnecting || isReadOnly;
+    const feedbackButtonDisabled = isLive || isConnecting || messages.length === 0 || isReadOnly;
+
+    return (
+        <div className="bg-slate-800 rounded-lg border border-slate-700 flex flex-col h-full max-h-[80vh] lg:max-h-full">
+            <div className="p-4 border-b border-slate-700">
+                <h3 className="text-lg font-semibold text-blue-400">{scenario.title}</h3>
+                <p className="text-sm text-slate-400 mt-1">{scenario.gatekeeperPersona}</p>
+            </div>
+            <div className="flex-grow p-4 overflow-y-auto">
+                {messages.length === 0 && !isLive && !isConnecting && (
+                    <div className="flex items-center justify-center h-full text-slate-500 text-center">
+                        {micPermission === 'denied' ? (
+                            <div className="flex flex-col items-center">
+                                <MicrophoneSlashIcon />
+                                <p className="mt-4 font-semibold text-red-400">Microphone Access Denied</p>
+                                <p className="mt-1 text-slate-400">Please enable microphone permissions in your browser settings to continue.</p>
+                            </div>
+                        ) : (
+                             <p>Press "Start Live Call" to begin the simulation.</p>
+                        )}
+                    </div>
+                )}
+                <div className="space-y-4">
+                    {messages.map((msg, index) => (
+                        <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                            {msg.role === 'model' && <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center"><RobotIcon /></div>}
+                            <div className={`px-4 py-2 rounded-lg max-w-lg ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                                <p>{msg.text}</p>
+                            </div>
+                            {msg.role === 'user' && <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center"><UserIcon /></div>}
+                        </div>
+                    ))}
+                </div>
+                <div ref={messagesEndRef} />
+            </div>
+            <div className="p-4 border-t border-slate-700 mt-auto bg-slate-800 rounded-b-lg">
+                <div className="relative mb-4">
+                    <select
+                        id="language-select"
+                        value={selectedLang}
+                        onChange={(e) => onLangChange(e.target.value)}
+                        disabled={isLive || isConnecting}
+                        className="w-full pl-10 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                    >
+                        <option value="en-US">English (US)</option>
+                        <option value="uk-UA">Ukrainian</option>
+                        <option value="ru-RU">Russian</option>
+                        <option value="de-DE">German</option>
+                        <option value="es-ES">Spanish</option>
+                        <option value="fr-FR">French</option>
+                        <option value="fil-PH">Filipino</option>
+                    </select>
+                    <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                        <GlobeIcon />
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                    {!isLive ? (
+                        <button
+                            onClick={handleStartCall}
+                            disabled={callButtonDisabled}
+                            className={`px-4 py-3 flex items-center justify-center gap-2 rounded-md font-semibold transition-colors ${callButtonDisabled ? 'bg-slate-600 text-slate-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 text-white'}`}
+                        >
+                            <PhoneIcon />
+                            {isConnecting ? 'Connecting...' : 'Start Live Call'}
+                        </button>
+                    ) : (
+                        <button
+                            onClick={handleStopCall}
+                            className="px-4 py-3 flex items-center justify-center gap-2 rounded-md font-semibold transition-colors bg-red-600 hover:bg-red-700 text-white"
+                        >
+                            <PhoneIcon className="transform -rotate-135" />
+                            End Call
+                        </button>
+                    )}
+                    <button
+                        onClick={handleEndAndFeedback}
+                        disabled={feedbackButtonDisabled}
+                        className={`px-4 py-3 rounded-md font-semibold transition-colors ${feedbackButtonDisabled ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+                    >
+                        End & Get Feedback
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
