@@ -251,7 +251,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             liveResources.audioSources.forEach(source => source.stop());
             liveResources.audioSources.clear();
         };
-    }, [isLive, scenario, messages, selectedLang, setMessages, onSuccess]);
+    }, [isLive, scenario, selectedLang, setMessages, onSuccess]);
 
 
     const handleStartClick = () => {
