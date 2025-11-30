@@ -26,6 +26,12 @@ const App: React.FC = () => {
   const [isSimulationSuccess, setIsSimulationSuccess] = useState(false);
   const [selectedLang, setSelectedLang] = useState('uk-UA');
   
+  // Use a ref to hold the latest messages to avoid stale closures in callbacks.
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   const handleSelectScenario = useCallback((scenario: Scenario) => {
     setCurrentScenario(scenario);
     setMessages([]);
@@ -34,12 +40,17 @@ const App: React.FC = () => {
     setIsSimulationSuccess(false);
   }, []);
 
-  const handleEndSimulation = useCallback(async (currentMessages: ChatMessage[]) => {
+  const handleEndSimulation = useCallback(async () => {
     if (!currentScenario || isLoadingFeedback) return;
+
+    // Use the ref to get the most up-to-date message list, guaranteeing
+    // the final success message is included in the analysis.
+    const finalMessages = messagesRef.current;
+    if (finalMessages.length === 0) return;
 
     setIsLoadingFeedback(true);
     
-    const performanceFeedback = await getPerformanceFeedback(currentScenario, currentMessages, isSimulationSuccess, selectedLang);
+    const performanceFeedback = await getPerformanceFeedback(currentScenario, finalMessages, isSimulationSuccess, selectedLang);
     
     setFeedback(performanceFeedback);
     setIsLoadingFeedback(false);
@@ -50,17 +61,8 @@ const App: React.FC = () => {
     if (currentScenario) {
         const successText = SUCCESS_MESSAGES[selectedLang]?.(currentScenario.decisionMaker) || SUCCESS_MESSAGES['en-US'](currentScenario.decisionMaker);
         const newSuccessMessage: ChatMessage = { role: 'model', text: successText };
-
-        // FIX: Pass the updated message list directly to handleEndSimulation
-        // This resolves the stale state bug by ensuring feedback is generated
-        // on the absolute latest conversation history.
-        setMessages(prev => {
-            const newMessages = [...prev, newSuccessMessage];
-            // Since we just succeeded, we can now trigger the feedback process
-            // with the guaranteed latest message list.
-            // Note: We don't call this automatically, user clicks the button.
-            return newMessages;
-        });
+        
+        setMessages(prev => [...prev, newSuccessMessage]);
         setIsSimulationSuccess(true);
     }
   }, [currentScenario, selectedLang]);
@@ -102,7 +104,7 @@ const App: React.FC = () => {
                     scenario={currentScenario}
                     messages={messages}
                     setMessages={setMessages}
-                    onEndSimulation={() => handleEndSimulation(messages)}
+                    onEndSimulation={handleEndSimulation}
                     isReadOnly={isChatReadOnly}
                     selectedLang={selectedLang}
                     onLangChange={setSelectedLang}
