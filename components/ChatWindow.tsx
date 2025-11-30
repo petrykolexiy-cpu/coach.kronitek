@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ChatMessage, Scenario } from '../types';
 import { createLiveSession, decode, decodeAudioData, createPcmBlob, concatenateFloat32Arrays } from '../services/geminiService';
@@ -77,6 +78,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     
+    // Use refs for callbacks and state to avoid stale closures in the async session setup
     const messagesRef = useRef(messages);
     const setMessagesRef = useRef(setMessages);
     const onSuccessRef = useRef(onSuccess);
@@ -224,11 +226,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         }
     };
 
-    const handleEndAndFeedback = () => {
-        setIsLive(false);
-        onEndSimulation();
-    };
-
     const callButtonDisabled = isConnecting || isReadOnly;
     const feedbackButtonDisabled = isLive || isConnecting || messages.length === 0 || isReadOnly;
 
@@ -312,7 +309,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                         </button>
                     )}
                     <button
-                        onClick={handleEndAndFeedback}
+                        onClick={onEndSimulation}
                         disabled={feedbackButtonDisabled}
                         className={`px-4 py-3 rounded-md font-semibold transition-colors ${feedbackButtonDisabled ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
                     >
