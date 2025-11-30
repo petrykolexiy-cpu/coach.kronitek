@@ -217,28 +217,12 @@ Provide your feedback as a single, valid JSON object with the following structur
 `;
 
   try {
+    // FIX: Removed the rigid `responseSchema` to prevent the API from erroring out on
+    // very short conversations. Relying on the more robust prompt instructions to
+    // ensure JSON is always returned.
     const response = await ai.models.generateContent({
       model,
       contents: monolithicPrompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            strengths: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            improvements: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            summary: { type: Type.STRING },
-            overallScore: { type: Type.NUMBER },
-          },
-          required: ['strengths', 'improvements', 'summary', 'overallScore'],
-        },
-      },
     });
 
     const jsonString = response.text;
