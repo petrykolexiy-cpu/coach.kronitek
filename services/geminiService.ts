@@ -202,6 +202,10 @@ ${formattedHistory}
 
 **Final Outcome:** ${outcome}
 
+**//-- ANALYSIS RULES --//**
+1. **Objective & Constructive:** Your analysis must be objective, constructive, and actionable.
+2. **HANDLE SHORT DIALOGUES:** Even if the conversation is very short (e.g., only one or two lines), you MUST still provide a full analysis in the required JSON format. The feedback should reflect the user's failure to engage the gatekeeper, offer a compelling reason, or move the conversation forward. The score should be low (1 or 2). Do not state that the conversation is too short to analyze.
+
 **//-- OUTPUT FORMAT --//**
 Provide your feedback as a single, valid JSON object with the following structure:
 - "strengths": An array of 2-3 strings highlighting what the user did well.
@@ -238,8 +242,18 @@ Provide your feedback as a single, valid JSON object with the following structur
     });
 
     const jsonString = response.text;
-    const feedbackObject = JSON.parse(jsonString);
-    return feedbackObject;
+    if (!jsonString) {
+        console.error("Gemini API returned an empty response for feedback.");
+        return FEEDBACK_FALLBACKS[language] || FEEDBACK_FALLBACKS['en-US'];
+    }
+    
+    try {
+        const feedbackObject = JSON.parse(jsonString);
+        return feedbackObject;
+    } catch (parseError) {
+        console.error("Failed to parse JSON feedback from Gemini. Raw response:", jsonString);
+        return FEEDBACK_FALLBACKS[language] || FEEDBACK_FALLBACKS['en-US'];
+    }
 
   } catch (error) {
     console.error("Error calling Gemini API for feedback:", error);
