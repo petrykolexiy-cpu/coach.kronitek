@@ -124,6 +124,13 @@ const MicrophoneSlashIcon = () => (
     </svg>
 );
 
+const ErrorIcon = () => (
+     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-12 h-12 text-yellow-500">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+    </svg>
+);
+
+
 export const ChatWindow: React.FC<ChatWindowProps> = ({
     scenario,
     messages,
@@ -134,13 +141,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     onLangChange,
     onSuccess,
 }) => {
-    const [isLive, setIsLive] = useState(false);
-    const [isConnecting, setIsConnecting] = useState(false);
-    const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
+    const [callState, setCallState] = useState<'idle' | 'connecting' | 'live' | 'denied' | 'error'>('idle');
     const messagesEndRef = useRef<HTMLDivElement>(null);
     
     // Use refs to hold the latest callbacks and state to prevent stale closures
-    // and avoid re-running the main useEffect hook unnecessarily.
     const messagesRef = useRef(messages);
     const setMessagesRef = useRef(setMessages);
     const onSuccessRef = useRef(onSuccess);
@@ -151,13 +155,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         onSuccessRef.current = onSuccess;
     }, [messages, setMessages, onSuccess]);
 
-
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
     useEffect(() => {
-        if (!isLive) {
+        // This effect manages the entire lifecycle of the call based on the callState.
+        if (callState !== 'connecting') {
             return;
         }
 
@@ -180,16 +184,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         };
 
         const startCall = async () => {
-            setIsConnecting(true);
-            setMicPermission('prompt');
-            
-            const currentInputTranscriptionRef = { current: '' };
-            const currentOutputTranscriptionRef = { current: '' };
-
             try {
                 liveResources.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 if (isCancelled) return;
-                setMicPermission('granted');
 
                 liveResources.inputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                 liveResources.outputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
@@ -209,11 +206,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 source.connect(liveResources.workletNode).connect(muteNode).connect(liveResources.inputCtx.destination);
                 
                 let nextStartTime = 0;
+                const currentInputTranscriptionRef = { current: '' };
+                const currentOutputTranscriptionRef = { current: '' };
 
                 const onmessage = async (message: LiveServerMessage) => {
                     if (message.toolCall?.functionCalls?.[0]?.name === 'connectCall') {
                         onSuccessRef.current();
-                        setIsLive(false);
+                        setCallState('idle');
                         return;
                     }
                     if (message.serverContent?.outputTranscription) currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
@@ -245,29 +244,34 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     }
                 };
                 
-                liveResources.session = await createLiveSession(scenario, messagesRef.current, selectedLang, {
-                    onopen: () => { if (!isCancelled) setIsConnecting(false); },
+                const TIMEOUT_MS = 15000;
+                const timeoutPromise = new Promise<never>((_, reject) => 
+                    setTimeout(() => reject(new Error('Connection timed out after 15 seconds.')), TIMEOUT_MS)
+                );
+
+                const sessionPromise = createLiveSession(scenario, messagesRef.current, selectedLang, {
+                    onopen: () => { if (!isCancelled) setCallState('live'); },
                     onmessage,
-                    onerror: (e) => { console.error("Session error:", e); if (!isCancelled) setIsLive(false); },
-                    onclose: () => { if (!isCancelled) setIsLive(false); },
+                    onerror: (e) => { console.error("Session error:", e); if (!isCancelled) setCallState('error'); },
+                    onclose: () => { if (!isCancelled) setCallState('idle'); },
                 });
+
+                liveResources.session = await Promise.race([sessionPromise, timeoutPromise]);
                 
-                // FIX: The handler that sends audio to Gemini must be set *after* the session is created.
-                // This resolves a critical race condition where audio was sent before the session was ready.
                 liveResources.workletNode.port.onmessage = (event) => {
                     liveResources.session?.sendRealtimeInput({ media: event.data as MediaBlob });
                 };
 
-                // FIX: Only tell the worklet to start processing *after* the session and message handler are ready.
                 liveResources.workletNode.port.postMessage({ command: 'start' });
 
             } catch (err) {
                 console.error("Failed to start call:", err);
+                if (isCancelled) return;
+                
                 if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
-                    setMicPermission('denied');
-                }
-                if (!isCancelled) {
-                    setIsLive(false);
+                    setCallState('denied');
+                } else {
+                    setCallState('error');
                 }
             }
         };
@@ -276,7 +280,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
         return () => {
             isCancelled = true;
-            setIsConnecting(false);
             liveResources.workletNode?.port.postMessage({ command: 'stop' });
             liveResources.session?.close();
             liveResources.stream?.getTracks().forEach(track => track.stop());
@@ -287,29 +290,29 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             liveResources.audioSources.forEach(source => source.stop());
             liveResources.audioSources.clear();
         };
-    // The dependency array is now simplified. It only re-runs if the user toggles the call,
-    // or changes the core scenario/language, which correctly implies a new session is needed.
-    // It will NO LONGER re-run on every message update.
-    }, [isLive, scenario, selectedLang]);
-
+    }, [callState, scenario, selectedLang]);
 
     const handleStartClick = () => {
-        if (!isLive && !isConnecting) {
-            setIsLive(true);
+        if (callState === 'idle' || callState === 'error' || callState === 'denied') {
+            // Clear previous error states before starting a new call
+            if(callState === 'error' || callState === 'denied') setCallState('idle'); 
+            setCallState('connecting');
         }
     };
 
     const handleStopClick = () => {
-        if (isLive) {
-            setIsLive(false);
+        if (callState === 'live' || callState === 'connecting') {
+            setCallState('idle');
         }
     };
 
     const handleEndAndFeedback = () => {
-        setIsLive(false);
+        setCallState('idle'); // Ensure call is stopped
         onEndSimulation();
     };
 
+    const isLive = callState === 'live';
+    const isConnecting = callState === 'connecting';
     const callButtonDisabled = isConnecting || isReadOnly;
     const feedbackButtonDisabled = isLive || isConnecting || messages.length === 0 || isReadOnly;
 
@@ -320,13 +323,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 <p className="text-sm text-slate-400 mt-1">{scenario.gatekeeperPersona}</p>
             </div>
             <div className="flex-grow p-4 overflow-y-auto">
-                {messages.length === 0 && !isLive && !isConnecting && (
+                {messages.length === 0 && callState !== 'live' && callState !== 'connecting' && (
                     <div className="flex items-center justify-center h-full text-slate-500 text-center">
-                        {micPermission === 'denied' ? (
+                        {callState === 'denied' ? (
                             <div className="flex flex-col items-center">
                                 <MicrophoneSlashIcon />
                                 <p className="mt-4 font-semibold text-red-400">Microphone Access Denied</p>
                                 <p className="mt-1 text-slate-400">Please enable microphone permissions in your browser settings to continue.</p>
+                            </div>
+                        ) : callState === 'error' ? (
+                            <div className="flex flex-col items-center">
+                                <ErrorIcon />
+                                <p className="mt-4 font-semibold text-yellow-400">Connection Failed</p>
+                                <p className="mt-1 text-slate-400">Could not connect to the simulation. Please check your connection and try again.</p>
                             </div>
                         ) : (
                              <p>Press "Start Live Call" to begin the simulation.</p>
