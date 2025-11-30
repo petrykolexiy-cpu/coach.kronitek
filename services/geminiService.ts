@@ -64,6 +64,45 @@ export async function decodeAudioData(
   return buffer;
 }
 
+
+export function encode(bytes: Uint8Array) {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// Helper to create the specific blob structure the API expects
+export function createPcmBlob(data: Float32Array): MediaBlob {
+  const l = data.length;
+  const int16 = new Int16Array(l);
+  for (let i = 0; i < l; i++) {
+    // clamp and convert to 16-bit PCM
+    int16[i] = Math.max(-1, Math.min(1, data[i])) * 32767;
+  }
+  return {
+    data: encode(new Uint8Array(int16.buffer)),
+    mimeType: 'audio/pcm;rate=16000',
+  };
+}
+
+// Helper to concatenate audio buffers for batching
+export function concatenateFloat32Arrays(arrays: Float32Array[]): Float32Array {
+    let totalLength = 0;
+    for (const arr of arrays) {
+        totalLength += arr.length;
+    }
+    const result = new Float32Array(totalLength);
+    let offset = 0;
+    for (const arr of arrays) {
+        result.set(arr, offset);
+        offset += arr.length;
+    }
+    return result;
+}
+
 // New function to manage the real-time voice session
 export function createLiveSession(
     scenario: Scenario,

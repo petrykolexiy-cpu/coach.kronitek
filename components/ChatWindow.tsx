@@ -1,8 +1,6 @@
-
-
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { ChatMessage, Scenario, MediaBlob } from '../types';
-import { createLiveSession, decode, decodeAudioData } from '../services/geminiService';
+import { ChatMessage, Scenario } from '../types';
+import { createLiveSession, decode, decodeAudioData, createPcmBlob, concatenateFloat32Arrays } from '../services/geminiService';
 import { LiveServerMessage } from '@google/genai';
 
 declare global {
@@ -13,74 +11,6 @@ declare global {
 
 type LiveSession = Awaited<ReturnType<typeof createLiveSession>>;
 
-// This AudioWorklet processor now includes a state (`isSessionReady`) and a message handler
-// to wait for a signal from the main thread before it starts processing audio.
-const audioProcessorWorkletString = `
-class AudioProcessor extends AudioWorkletProcessor {
-    constructor() {
-        super();
-        this.isSessionReady = false; // Wait for the main thread to signal readiness.
-        this.bufferSize = Math.floor(sampleRate * 0.1); 
-        this.buffer = new Float32Array(this.bufferSize);
-        this.bufferIndex = 0;
-
-        // The handler that waits for the 'start' command.
-        this.port.onmessage = (event) => {
-            if (event.data.command === 'start') {
-                this.isSessionReady = true;
-            } else if (event.data.command === 'stop') {
-                this.isSessionReady = false;
-            }
-        };
-
-        this.encode = (bytes) => {
-            let binary = '';
-            const len = bytes.byteLength;
-            for (let i = 0; i < len; i++) {
-                binary += String.fromCharCode(bytes[i]);
-            }
-            return btoa(binary);
-        };
-    }
-
-    process(inputs) {
-        // Do not process any audio until the session is ready.
-        if (!this.isSessionReady) {
-            return true;
-        }
-
-        const input = inputs[0];
-        if (input.length === 0 || input[0].length === 0) {
-            return true;
-        }
-
-        const inputData = input[0];
-        
-        for (let i = 0; i < inputData.length; i++) {
-            this.buffer[this.bufferIndex++] = inputData[i];
-
-            if (this.bufferIndex === this.bufferSize) {
-                const pcm16 = new Int16Array(this.bufferSize);
-                for (let j = 0; j < this.bufferSize; j++) {
-                    pcm16[j] = Math.max(-1, Math.min(1, this.buffer[j])) * 32767;
-                }
-                
-                const base64Data = this.encode(new Uint8Array(pcm16.buffer));
-
-                this.port.postMessage({
-                    data: base64Data,
-                    mimeType: 'audio/pcm;rate=16000',
-                });
-
-                this.bufferIndex = 0;
-            }
-        }
-        return true;
-    }
-}
-
-registerProcessor('audio-processor', AudioProcessor);
-`;
 
 interface ChatWindowProps {
   scenario: Scenario;
@@ -141,10 +71,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     onLangChange,
     onSuccess,
 }) => {
-    const [callState, setCallState] = useState<'idle' | 'connecting' | 'live' | 'denied' | 'error'>('idle');
+    const [isLive, setIsLive] = useState(false);
+    const [isConnecting, setIsConnecting] = useState(false);
+    const [errorState, setErrorState] = useState<'denied' | 'error' | null>(null);
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
     
-    // Use refs to hold the latest callbacks and state to prevent stale closures
     const messagesRef = useRef(messages);
     const setMessagesRef = useRef(setMessages);
     const onSuccessRef = useRef(onSuccess);
@@ -159,119 +91,105 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    useEffect(() => {
-        // This effect manages the entire lifecycle of the call based on the callState.
-        if (callState !== 'connecting') {
-            return;
-        }
 
-        let isCancelled = false;
-        
-        const liveResources: {
-            session: LiveSession | null,
-            stream: MediaStream | null,
-            inputCtx: AudioContext | null,
-            outputCtx: AudioContext | null,
-            workletNode: AudioWorkletNode | null,
-            audioSources: Set<AudioBufferSourceNode>
-        } = {
-            session: null,
-            stream: null,
-            inputCtx: null,
-            outputCtx: null,
-            workletNode: null,
-            audioSources: new Set()
-        };
+    useEffect(() => {
+        if (!isLive) return;
+
+        let session: LiveSession | null = null;
+        let stream: MediaStream | null = null;
+        let inputCtx: AudioContext | null = null;
+        let outputCtx: AudioContext | null = null;
+        let scriptProcessor: ScriptProcessorNode | null = null;
+        const audioSources = new Set<AudioBufferSourceNode>();
 
         const startCall = async () => {
+            setIsConnecting(true);
+            setErrorState(null);
             try {
-                liveResources.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                if (isCancelled) return;
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                inputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                outputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+                await Promise.all([inputCtx.resume(), outputCtx.resume()]);
 
-                liveResources.inputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                liveResources.outputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-                await Promise.all([liveResources.inputCtx.resume(), liveResources.outputCtx.resume()]);
-                if (isCancelled) return;
-
-                const workletURL = URL.createObjectURL(new Blob([audioProcessorWorkletString], { type: 'application/javascript' }));
-                await liveResources.inputCtx.audioWorklet.addModule(workletURL);
-                URL.revokeObjectURL(workletURL);
-                if (isCancelled) return;
-                
-                const source = liveResources.inputCtx.createMediaStreamSource(liveResources.stream);
-                liveResources.workletNode = new AudioWorkletNode(liveResources.inputCtx, 'audio-processor');
-                
-                const muteNode = liveResources.inputCtx.createGain();
-                muteNode.gain.value = 0;
-                source.connect(liveResources.workletNode).connect(muteNode).connect(liveResources.inputCtx.destination);
-                
                 let nextStartTime = 0;
                 const currentInputTranscriptionRef = { current: '' };
                 const currentOutputTranscriptionRef = { current: '' };
 
-                const onmessage = async (message: LiveServerMessage) => {
-                    if (message.toolCall?.functionCalls?.[0]?.name === 'connectCall') {
-                        onSuccessRef.current();
-                        setCallState('idle');
-                        return;
-                    }
-                    if (message.serverContent?.outputTranscription) currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
-                    if (message.serverContent?.inputTranscription) currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
-                    if (message.serverContent?.turnComplete) {
-                        const finalInput = currentInputTranscriptionRef.current.trim();
-                        const finalOutput = currentOutputTranscriptionRef.current.trim();
-                        currentInputTranscriptionRef.current = '';
-                        currentOutputTranscriptionRef.current = '';
-                        const newMessages: ChatMessage[] = [];
-                        if (finalInput) newMessages.push({ role: 'user', text: finalInput });
-                        if (finalOutput) newMessages.push({ role: 'model', text: finalOutput });
-                        if (newMessages.length > 0) {
-                            setMessagesRef.current(prev => [...prev, ...newMessages]);
+                session = await createLiveSession(scenario, messagesRef.current, selectedLang, {
+                    onopen: () => setIsConnecting(false),
+                    onmessage: async (message) => {
+                        if (message.toolCall?.functionCalls?.[0]?.name === 'connectCall') {
+                            onSuccessRef.current();
+                            setIsLive(false);
+                            return;
                         }
-                    }
-                    const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-                    const outCtx = liveResources.outputCtx;
-                    if (base64Audio && outCtx) {
-                        const audioBuffer = await decodeAudioData(decode(base64Audio), outCtx, 24000, 1);
-                        nextStartTime = Math.max(nextStartTime, outCtx.currentTime);
-                        const audioSource = outCtx.createBufferSource();
-                        audioSource.buffer = audioBuffer;
-                        audioSource.connect(outCtx.destination);
-                        audioSource.addEventListener('ended', () => liveResources.audioSources.delete(audioSource));
-                        liveResources.audioSources.add(audioSource);
-                        audioSource.start(nextStartTime);
-                        nextStartTime += audioBuffer.duration;
-                    }
-                };
-                
-                const TIMEOUT_MS = 15000;
-                const timeoutPromise = new Promise<never>((_, reject) => 
-                    setTimeout(() => reject(new Error('Connection timed out after 15 seconds.')), TIMEOUT_MS)
-                );
-
-                const sessionPromise = createLiveSession(scenario, messagesRef.current, selectedLang, {
-                    onopen: () => { if (!isCancelled) setCallState('live'); },
-                    onmessage,
-                    onerror: (e) => { console.error("Session error:", e); if (!isCancelled) setCallState('error'); },
-                    onclose: () => { if (!isCancelled) setCallState('idle'); },
+                        if (message.serverContent?.outputTranscription) currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
+                        if (message.serverContent?.inputTranscription) currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
+                        if (message.serverContent?.turnComplete) {
+                            const finalInput = currentInputTranscriptionRef.current.trim();
+                            const finalOutput = currentOutputTranscriptionRef.current.trim();
+                            currentInputTranscriptionRef.current = '';
+                            currentOutputTranscriptionRef.current = '';
+                            const newMessages: ChatMessage[] = [];
+                            if (finalInput) newMessages.push({ role: 'user', text: finalInput });
+                            if (finalOutput) newMessages.push({ role: 'model', text: finalOutput });
+                            if (newMessages.length > 0) {
+                                setMessagesRef.current(prev => [...prev, ...newMessages]);
+                            }
+                        }
+                        const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                        if (base64Audio && outputCtx) {
+                            const audioBuffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000, 1);
+                            nextStartTime = Math.max(nextStartTime, outputCtx.currentTime);
+                            const audioSource = outputCtx.createBufferSource();
+                            audioSource.buffer = audioBuffer;
+                            audioSource.connect(outputCtx.destination);
+                            audioSource.addEventListener('ended', () => audioSources.delete(audioSource));
+                            audioSources.add(audioSource);
+                            audioSource.start(nextStartTime);
+                            nextStartTime += audioBuffer.duration;
+                        }
+                    },
+                    onerror: (e) => { console.error("Session error:", e); setErrorState('error'); setIsLive(false); },
+                    onclose: () => setIsLive(false),
                 });
 
-                liveResources.session = await Promise.race([sessionPromise, timeoutPromise]);
+                const bufferSize = 4096;
+                const audioBuffer: Float32Array[] = [];
+                const bufferDurationMs = 100;
+                const bufferMaxByteLength = (16000 * bufferDurationMs) / 1000 * 4;
+                let currentByteLength = 0;
                 
-                liveResources.workletNode.port.onmessage = (event) => {
-                    liveResources.session?.sendRealtimeInput({ media: event.data as MediaBlob });
-                };
+                scriptProcessor = inputCtx.createScriptProcessor(bufferSize, 1, 1);
+                
+                scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                    const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                    const inputDataCopy = new Float32Array(inputData);
 
-                liveResources.workletNode.port.postMessage({ command: 'start' });
+                    audioBuffer.push(inputDataCopy);
+                    currentByteLength += inputDataCopy.byteLength;
+                    
+                    if (currentByteLength >= bufferMaxByteLength) {
+                        const fullBuffer = concatenateFloat32Arrays(audioBuffer);
+                        const pcmBlob = createPcmBlob(fullBuffer);
+                        session?.sendRealtimeInput({ media: pcmBlob });
+                        audioBuffer.length = 0;
+                        currentByteLength = 0;
+                    }
+                };
+                
+                const source = inputCtx.createMediaStreamSource(stream);
+                source.connect(scriptProcessor);
+                scriptProcessor.connect(inputCtx.destination);
 
             } catch (err) {
                 console.error("Failed to start call:", err);
-                if (isCancelled) return;
-                
+                setIsConnecting(false);
+                setIsLive(false);
                 if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
-                    setCallState('denied');
+                    setErrorState('denied');
                 } else {
-                    setCallState('error');
+                    setErrorState('error');
                 }
             }
         };
@@ -279,40 +197,38 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         startCall();
 
         return () => {
-            isCancelled = true;
-            liveResources.workletNode?.port.postMessage({ command: 'stop' });
-            liveResources.session?.close();
-            liveResources.stream?.getTracks().forEach(track => track.stop());
-            liveResources.workletNode?.port.close();
-            liveResources.workletNode?.disconnect();
-            if (liveResources.inputCtx?.state !== 'closed') liveResources.inputCtx?.close();
-            if (liveResources.outputCtx?.state !== 'closed') liveResources.outputCtx?.close();
-            liveResources.audioSources.forEach(source => source.stop());
-            liveResources.audioSources.clear();
+            setIsConnecting(false);
+            session?.close();
+            stream?.getTracks().forEach(track => track.stop());
+            scriptProcessor?.disconnect();
+            if (inputCtx?.state !== 'closed') inputCtx?.close();
+            if (outputCtx?.state !== 'closed') outputCtx?.close();
+            audioSources.forEach(source => source.stop());
+            audioSources.clear();
         };
-    }, [callState, scenario, selectedLang]);
+    }, [isLive, scenario, selectedLang]);
 
     const handleStartClick = () => {
-        if (callState === 'idle' || callState === 'error' || callState === 'denied') {
-            // Clear previous error states before starting a new call
-            if(callState === 'error' || callState === 'denied') setCallState('idle'); 
-            setCallState('connecting');
+        if (!isLive && !isConnecting) {
+             // Clear previous messages only when starting a new call from a finished state
+            if (messages.length > 0 && !isReadOnly) {
+                setMessages([]);
+            }
+            setIsLive(true);
         }
     };
 
     const handleStopClick = () => {
-        if (callState === 'live' || callState === 'connecting') {
-            setCallState('idle');
+        if (isLive || isConnecting) {
+            setIsLive(false);
         }
     };
 
     const handleEndAndFeedback = () => {
-        setCallState('idle'); // Ensure call is stopped
+        setIsLive(false);
         onEndSimulation();
     };
 
-    const isLive = callState === 'live';
-    const isConnecting = callState === 'connecting';
     const callButtonDisabled = isConnecting || isReadOnly;
     const feedbackButtonDisabled = isLive || isConnecting || messages.length === 0 || isReadOnly;
 
@@ -323,15 +239,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 <p className="text-sm text-slate-400 mt-1">{scenario.gatekeeperPersona}</p>
             </div>
             <div className="flex-grow p-4 overflow-y-auto">
-                {messages.length === 0 && callState !== 'live' && callState !== 'connecting' && (
+                {messages.length === 0 && !isLive && !isConnecting && (
                     <div className="flex items-center justify-center h-full text-slate-500 text-center">
-                        {callState === 'denied' ? (
+                        {errorState === 'denied' ? (
                             <div className="flex flex-col items-center">
                                 <MicrophoneSlashIcon />
                                 <p className="mt-4 font-semibold text-red-400">Microphone Access Denied</p>
                                 <p className="mt-1 text-slate-400">Please enable microphone permissions in your browser settings to continue.</p>
                             </div>
-                        ) : callState === 'error' ? (
+                        ) : errorState === 'error' ? (
                             <div className="flex flex-col items-center">
                                 <ErrorIcon />
                                 <p className="mt-4 font-semibold text-yellow-400">Connection Failed</p>
