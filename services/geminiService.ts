@@ -184,12 +184,13 @@ export async function getPerformanceFeedback(scenario: Scenario, history: ChatMe
   const formattedHistory = history.map(msg => `${msg.role === 'user' ? 'Sales Manager' : 'Gatekeeper'}: ${msg.text}`).join('\n');
   const outcome = success ? "The user successfully reached the decision-maker." : "The user did not reach the decision-maker.";
 
-  // Using a monolithic prompt for maximum reliability, consistent with getGatekeeperResponse.
-  const monolithicPrompt = `You are an expert AI sales coach. Your task is to analyze a sales manager's performance in a role-play simulation where they tried to get past a gatekeeper.
-You will be given the scenario details, the full conversation transcript, and the final outcome.
-Your analysis must be objective, constructive, and actionable.
+  // A simplified prompt that focuses on the task, not the format.
+  // This prevents conflicts between the prompt and the responseSchema.
+  const monolithicPrompt = `You are an expert AI sales coach. Your task is to provide an objective, constructive, and actionable performance analysis for a sales manager based on the provided simulation data.
+Even for very short conversations, provide a full analysis with a low score and feedback explaining the user's failure to engage the gatekeeper.
+All of your analysis and text MUST be in the following language: ${language}.
 
-**//-- ANALYSIS REQUEST --//**
+**//-- SIMULATION DATA --//**
 
 **Scenario:**
 - Title: ${scenario.title}
@@ -201,18 +202,10 @@ Your analysis must be objective, constructive, and actionable.
 ${formattedHistory}
 
 **Final Outcome:** ${outcome}
-
-**//-- ANALYSIS RULES --//**
-1. **Objective & Constructive:** Your analysis must be objective, constructive, and actionable.
-2. **HANDLE SHORT DIALOGUES:** Even if the conversation is very short (e.g., only one or two lines), you MUST still provide a full analysis in the required JSON format. The feedback should reflect the user's failure to engage the gatekeeper, offer a compelling reason, or move the conversation forward. The score should be low (1 or 2). Do not state that the conversation is too short to analyze.
-
-**//-- OUTPUT FORMAT --//**
-You MUST provide your feedback as a single, valid JSON object that adheres to the provided schema.
-VERY IMPORTANT: All text fields in your JSON response MUST be in the language specified by this code: ${language}.
 `;
 
-    // FIX: Re-introduced a strict responseSchema to enforce a valid JSON output,
-    // which is more reliable for complex conversations than relying on the prompt alone.
+    // A strict responseSchema to enforce a valid JSON output.
+    // This is the single source of truth for the response format.
     const feedbackSchema = {
         type: Type.OBJECT,
         properties: {
