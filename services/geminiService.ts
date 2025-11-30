@@ -248,7 +248,10 @@ Provide your feedback as a single, valid JSON object with the following structur
     }
     
     try {
-        const feedbackObject = JSON.parse(jsonString);
+        // FIX: The AI can sometimes wrap its response in markdown fences.
+        // This removes them before parsing to make the process more robust.
+        const cleanedJsonString = jsonString.replace(/^```json\s*|```\s*$/g, '').trim();
+        const feedbackObject = JSON.parse(cleanedJsonString);
         return feedbackObject;
     } catch (parseError) {
         console.error("Failed to parse JSON feedback from Gemini. Raw response:", jsonString);
