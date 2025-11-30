@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ChatMessage, Scenario, MediaBlob } from '../types';
 import { createLiveSession, decode, decodeAudioData } from '../services/geminiService';
@@ -136,8 +137,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     const [isConnecting, setIsConnecting] = useState(false);
     const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const currentInputTranscriptionRef = useRef('');
-    const currentOutputTranscriptionRef = useRef('');
+    
+    // Use refs to hold the latest callbacks and state to prevent stale closures
+    // and avoid re-running the main useEffect hook unnecessarily.
+    const messagesRef = useRef(messages);
+    const setMessagesRef = useRef(setMessages);
+    const onSuccessRef = useRef(onSuccess);
+    
+    useEffect(() => {
+        messagesRef.current = messages;
+        setMessagesRef.current = setMessages;
+        onSuccessRef.current = onSuccess;
+    }, [messages, setMessages, onSuccess]);
+
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -169,6 +181,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         const startCall = async () => {
             setIsConnecting(true);
             setMicPermission('prompt');
+            
+            const currentInputTranscriptionRef = { current: '' };
+            const currentOutputTranscriptionRef = { current: '' };
+
             try {
                 liveResources.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 if (isCancelled) return;
@@ -187,8 +203,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 const source = liveResources.inputCtx.createMediaStreamSource(liveResources.stream);
                 liveResources.workletNode = new AudioWorkletNode(liveResources.inputCtx, 'audio-processor');
                 
-                // The onmessage listener is attached immediately, but the worklet won't send data
-                // until it receives the 'start' command.
                 liveResources.workletNode.port.onmessage = (event) => {
                     liveResources.session?.sendRealtimeInput({ media: event.data as MediaBlob });
                 };
@@ -201,7 +215,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
                 const onmessage = async (message: LiveServerMessage) => {
                     if (message.toolCall?.functionCalls?.[0]?.name === 'connectCall') {
-                        onSuccess();
+                        onSuccessRef.current();
                         setIsLive(false);
                         return;
                     }
@@ -215,7 +229,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                         const newMessages: ChatMessage[] = [];
                         if (finalInput) newMessages.push({ role: 'user', text: finalInput });
                         if (finalOutput) newMessages.push({ role: 'model', text: finalOutput });
-                        if (newMessages.length > 0) setMessages(prev => [...prev, ...newMessages]);
+                        if (newMessages.length > 0) {
+                            setMessagesRef.current(prev => [...prev, ...newMessages]);
+                        }
                     }
                     const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
                     const outCtx = liveResources.outputCtx;
@@ -232,14 +248,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     }
                 };
                 
-                liveResources.session = await createLiveSession(scenario, messages, selectedLang, {
+                // Use the ref to get the most recent message history at the moment the call starts.
+                liveResources.session = await createLiveSession(scenario, messagesRef.current, selectedLang, {
                     onopen: () => { if (!isCancelled) setIsConnecting(false); },
                     onmessage,
                     onerror: (e) => { console.error("Session error:", e); if (!isCancelled) setIsLive(false); },
                     onclose: () => { if (!isCancelled) setIsLive(false); },
                 });
                 
-                // After the session is successfully created, send the 'start' command to the worklet.
                 liveResources.workletNode.port.postMessage({ command: 'start' });
 
             } catch (err) {
@@ -258,7 +274,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         return () => {
             isCancelled = true;
             setIsConnecting(false);
-            // Politely ask the worklet to stop processing before closing everything else.
             liveResources.workletNode?.port.postMessage({ command: 'stop' });
             liveResources.session?.close();
             liveResources.stream?.getTracks().forEach(track => track.stop());
@@ -269,7 +284,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             liveResources.audioSources.forEach(source => source.stop());
             liveResources.audioSources.clear();
         };
-    }, [isLive, scenario, selectedLang, setMessages, onSuccess, messages]);
+    // The dependency array is now simplified. It only re-runs if the user toggles the call,
+    // or changes the core scenario/language, which correctly implies a new session is needed.
+    // It will NO LONGER re-run on every message update.
+    }, [isLive, scenario, selectedLang]);
 
 
     const handleStartClick = () => {

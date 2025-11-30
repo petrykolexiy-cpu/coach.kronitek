@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from 'react';
+
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Scenario, ChatMessage, Feedback } from './types';
 import { getPerformanceFeedback } from './services/geminiService';
 import { Header } from './components/Header';
@@ -24,6 +25,13 @@ const App: React.FC = () => {
   const [isLoadingFeedback, setIsLoadingFeedback] = useState(false);
   const [isSimulationSuccess, setIsSimulationSuccess] = useState(false);
   const [selectedLang, setSelectedLang] = useState('uk-UA');
+  
+  // A ref to hold the latest messages to solve stale closure issues in callbacks.
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
 
   const handleSelectScenario = useCallback((scenario: Scenario) => {
     setCurrentScenario(scenario);
@@ -35,28 +43,18 @@ const App: React.FC = () => {
 
   const handleEndSimulation = useCallback(async () => {
     if (!currentScenario || isLoadingFeedback) return;
-    
-    setIsLoadingFeedback(true);
-    
-    // Create a final, definitive list of messages for feedback analysis.
-    // This approach correctly captures the state *at the moment of ending*, including the success message.
-    const finalMessages = [...messages];
-    if (isSimulationSuccess) {
-        const successText = SUCCESS_MESSAGES[selectedLang]?.(currentScenario.decisionMaker) || SUCCESS_MESSAGES['en-US'](currentScenario.decisionMaker);
-        if (!finalMessages.some(m => m.text === successText)) {
-            finalMessages.push({ role: 'model', text: successText });
-        }
-    }
-    
-    // Update the UI immediately with the final message list.
-    setMessages(finalMessages);
 
-    // Request feedback using this definitive message list.
+    setIsLoadingFeedback(true);
+
+    // Use the ref to get the absolute latest message list for analysis,
+    // preventing race conditions where feedback is generated on stale state.
+    const finalMessages = messagesRef.current;
+
     const performanceFeedback = await getPerformanceFeedback(currentScenario, finalMessages, isSimulationSuccess, selectedLang);
     
     setFeedback(performanceFeedback);
     setIsLoadingFeedback(false);
-  }, [currentScenario, messages, isSimulationSuccess, selectedLang, isLoadingFeedback]);
+  }, [currentScenario, isSimulationSuccess, selectedLang, isLoadingFeedback]);
 
 
   const handleSuccess = useCallback(() => {
