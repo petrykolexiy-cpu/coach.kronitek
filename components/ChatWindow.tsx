@@ -11,13 +11,25 @@ declare global {
 
 type LiveSession = Awaited<ReturnType<typeof createLiveSession>>;
 
+// This AudioWorklet processor now includes a state (`isSessionReady`) and a message handler
+// to wait for a signal from the main thread before it starts processing audio.
 const audioProcessorWorkletString = `
 class AudioProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
+        this.isSessionReady = false; // Wait for the main thread to signal readiness.
         this.bufferSize = Math.floor(sampleRate * 0.1); 
         this.buffer = new Float32Array(this.bufferSize);
         this.bufferIndex = 0;
+
+        // The handler that waits for the 'start' command.
+        this.port.onmessage = (event) => {
+            if (event.data.command === 'start') {
+                this.isSessionReady = true;
+            } else if (event.data.command === 'stop') {
+                this.isSessionReady = false;
+            }
+        };
 
         this.encode = (bytes) => {
             let binary = '';
@@ -30,6 +42,11 @@ class AudioProcessor extends AudioWorkletProcessor {
     }
 
     process(inputs) {
+        // Do not process any audio until the session is ready.
+        if (!this.isSessionReady) {
+            return true;
+        }
+
         const input = inputs[0];
         if (input.length === 0 || input[0].length === 0) {
             return true;
@@ -126,18 +143,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    // This is the core architectural change. This effect now manages the entire lifecycle
-    // of a live call session, tying it declaratively to the `isLive` state.
     useEffect(() => {
-        // If the call is not supposed to be live, we do nothing.
         if (!isLive) {
             return;
         }
 
-        // This flag prevents race conditions if the component unmounts while async operations are in flight.
         let isCancelled = false;
         
-        // This object holds all our live resources so we can reliably clean them up.
         const liveResources: {
             session: LiveSession | null,
             stream: MediaStream | null,
@@ -174,6 +186,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 
                 const source = liveResources.inputCtx.createMediaStreamSource(liveResources.stream);
                 liveResources.workletNode = new AudioWorkletNode(liveResources.inputCtx, 'audio-processor');
+                
+                // The onmessage listener is attached immediately, but the worklet won't send data
+                // until it receives the 'start' command.
+                liveResources.workletNode.port.onmessage = (event) => {
+                    liveResources.session?.sendRealtimeInput({ media: event.data as MediaBlob });
+                };
+
                 const muteNode = liveResources.inputCtx.createGain();
                 muteNode.gain.value = 0;
                 source.connect(liveResources.workletNode).connect(muteNode).connect(liveResources.inputCtx.destination);
@@ -183,7 +202,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 const onmessage = async (message: LiveServerMessage) => {
                     if (message.toolCall?.functionCalls?.[0]?.name === 'connectCall') {
                         onSuccess();
-                        setIsLive(false); // This will trigger the cleanup of this effect
+                        setIsLive(false);
                         return;
                     }
                     if (message.serverContent?.outputTranscription) currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
@@ -220,9 +239,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     onclose: () => { if (!isCancelled) setIsLive(false); },
                 });
                 
-                liveResources.workletNode.port.onmessage = (event) => {
-                    liveResources.session?.sendRealtimeInput({ media: event.data as MediaBlob });
-                };
+                // After the session is successfully created, send the 'start' command to the worklet.
+                liveResources.workletNode.port.postMessage({ command: 'start' });
 
             } catch (err) {
                 console.error("Failed to start call:", err);
@@ -237,11 +255,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
         startCall();
 
-        // This cleanup function is the critical part. It runs ONLY when `isLive` changes from true to false,
-        // or when the component unmounts. This prevents the session from being torn down on every message re-render.
         return () => {
             isCancelled = true;
             setIsConnecting(false);
+            // Politely ask the worklet to stop processing before closing everything else.
+            liveResources.workletNode?.port.postMessage({ command: 'stop' });
             liveResources.session?.close();
             liveResources.stream?.getTracks().forEach(track => track.stop());
             liveResources.workletNode?.port.close();
@@ -251,7 +269,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             liveResources.audioSources.forEach(source => source.stop());
             liveResources.audioSources.clear();
         };
-    }, [isLive, scenario, selectedLang, setMessages, onSuccess]);
+    }, [isLive, scenario, selectedLang, setMessages, onSuccess, messages]);
 
 
     const handleStartClick = () => {
@@ -267,7 +285,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     };
 
     const handleEndAndFeedback = () => {
-        setIsLive(false); // This will trigger the cleanup effect
+        setIsLive(false);
         onEndSimulation();
     };
 
