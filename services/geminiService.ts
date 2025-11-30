@@ -207,22 +207,45 @@ ${formattedHistory}
 2. **HANDLE SHORT DIALOGUES:** Even if the conversation is very short (e.g., only one or two lines), you MUST still provide a full analysis in the required JSON format. The feedback should reflect the user's failure to engage the gatekeeper, offer a compelling reason, or move the conversation forward. The score should be low (1 or 2). Do not state that the conversation is too short to analyze.
 
 **//-- OUTPUT FORMAT --//**
-Provide your feedback as a single, valid JSON object with the following structure:
-- "strengths": An array of 2-3 strings highlighting what the user did well.
-- "improvements": An array of 2-3 strings with specific suggestions for what to do better next time.
-- "summary": A concise paragraph (2-3 sentences) summarizing the overall performance and key takeaway.
-- "overallScore": A single integer between 1 and 10, where 1 is very poor and 10 is perfect. Base this score on the user's strategy, language, persistence, and the final outcome relative to the scenario's difficulty.
-
-**VERY IMPORTANT:** All text fields in your JSON response MUST be in the language specified by this code: ${language}.
+You MUST provide your feedback as a single, valid JSON object that adheres to the provided schema.
+VERY IMPORTANT: All text fields in your JSON response MUST be in the language specified by this code: ${language}.
 `;
 
+    // FIX: Re-introduced a strict responseSchema to enforce a valid JSON output,
+    // which is more reliable for complex conversations than relying on the prompt alone.
+    const feedbackSchema = {
+        type: Type.OBJECT,
+        properties: {
+          strengths: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "2-3 strings highlighting what the user did well."
+          },
+          improvements: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "2-3 strings with specific suggestions for what to do better."
+          },
+          summary: {
+            type: Type.STRING,
+            description: "A concise paragraph summarizing the overall performance."
+          },
+          overallScore: {
+            type: Type.INTEGER,
+            description: "A single integer score between 1 and 10."
+          }
+        },
+        required: ["strengths", "improvements", "summary", "overallScore"]
+      };
+
   try {
-    // FIX: Removed the rigid `responseSchema` to prevent the API from erroring out on
-    // very short conversations. Relying on the more robust prompt instructions to
-    // ensure JSON is always returned.
     const response = await ai.models.generateContent({
       model,
       contents: monolithicPrompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: feedbackSchema,
+      },
     });
 
     const jsonString = response.text;
@@ -232,8 +255,6 @@ Provide your feedback as a single, valid JSON object with the following structur
     }
     
     try {
-        // FIX: The AI can sometimes wrap its response in markdown fences.
-        // This removes them before parsing to make the process more robust.
         const cleanedJsonString = jsonString.replace(/^```json\s*|```\s*$/g, '').trim();
         const feedbackObject = JSON.parse(cleanedJsonString);
         return feedbackObject;
