@@ -1,4 +1,5 @@
 
+
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ChatMessage, Scenario, MediaBlob } from '../types';
 import { createLiveSession, decode, decodeAudioData } from '../services/geminiService';
@@ -203,10 +204,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 const source = liveResources.inputCtx.createMediaStreamSource(liveResources.stream);
                 liveResources.workletNode = new AudioWorkletNode(liveResources.inputCtx, 'audio-processor');
                 
-                liveResources.workletNode.port.onmessage = (event) => {
-                    liveResources.session?.sendRealtimeInput({ media: event.data as MediaBlob });
-                };
-
                 const muteNode = liveResources.inputCtx.createGain();
                 muteNode.gain.value = 0;
                 source.connect(liveResources.workletNode).connect(muteNode).connect(liveResources.inputCtx.destination);
@@ -248,7 +245,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     }
                 };
                 
-                // Use the ref to get the most recent message history at the moment the call starts.
                 liveResources.session = await createLiveSession(scenario, messagesRef.current, selectedLang, {
                     onopen: () => { if (!isCancelled) setIsConnecting(false); },
                     onmessage,
@@ -256,6 +252,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     onclose: () => { if (!isCancelled) setIsLive(false); },
                 });
                 
+                // FIX: The handler that sends audio to Gemini must be set *after* the session is created.
+                // This resolves a critical race condition where audio was sent before the session was ready.
+                liveResources.workletNode.port.onmessage = (event) => {
+                    liveResources.session?.sendRealtimeInput({ media: event.data as MediaBlob });
+                };
+
+                // FIX: Only tell the worklet to start processing *after* the session and message handler are ready.
                 liveResources.workletNode.port.postMessage({ command: 'start' });
 
             } catch (err) {
