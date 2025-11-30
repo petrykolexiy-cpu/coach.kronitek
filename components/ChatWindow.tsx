@@ -120,7 +120,6 @@ const MicrophoneSlashIcon = () => (
     </svg>
 );
 
-
 export const ChatWindow: React.FC<ChatWindowProps> = ({
     scenario,
     messages,
@@ -135,150 +134,135 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     const [isConnecting, setIsConnecting] = useState(false);
     const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
 
-    const liveSessionRef = useRef<LiveSession | null>(null);
-    const inputAudioContextRef = useRef<AudioContext | null>(null);
-    const outputAudioContextRef = useRef<AudioContext | null>(null);
-    const mediaStreamRef = useRef<MediaStream | null>(null);
-    const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-    const nextStartTimeRef = useRef(0);
-    const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+    const sessionRef = useRef<LiveSession | null>(null);
     const currentInputTranscriptionRef = useRef('');
     const currentOutputTranscriptionRef = useRef('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
-
-    const onSuccessRef = useRef(onSuccess);
-    useEffect(() => { onSuccessRef.current = onSuccess; }, [onSuccess]);
-
-    const onEndSimulationRef = useRef(onEndSimulation);
-    useEffect(() => { onEndSimulationRef.current = onEndSimulation; }, [onEndSimulation]);
+    const stopCallRef = useRef<(() => void) | null>(null);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
-
-    const handleStopCall = useCallback(() => {
-        liveSessionRef.current?.close();
-        mediaStreamRef.current?.getTracks().forEach(track => track.stop());
-        workletNodeRef.current?.port.close();
-        workletNodeRef.current?.disconnect();
-        
-        if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
-        if (outputAudioContextRef.current?.state !== 'closed') outputAudioContextRef.current?.close();
-
-        audioSourcesRef.current.forEach(source => source.stop());
-        audioSourcesRef.current.clear();
-        
-        liveSessionRef.current = null;
-        mediaStreamRef.current = null;
-        workletNodeRef.current = null;
-        inputAudioContextRef.current = null;
-        outputAudioContextRef.current = null;
-        nextStartTimeRef.current = 0;
-
-        setIsLive(false);
-        setIsConnecting(false);
+    
+    // Effect to clean up the call when the component unmounts
+    useEffect(() => {
+        return () => {
+            stopCallRef.current?.();
+        };
     }, []);
-
-    const onmessage = useCallback(async (message: LiveServerMessage) => {
-        if (message.toolCall?.functionCalls?.[0]?.name === 'connectCall') {
-            onSuccessRef.current();
-            handleStopCall();
-            return;
-        }
-
-        if (message.serverContent?.outputTranscription) {
-            currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
-        }
-        if (message.serverContent?.inputTranscription) {
-            currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
-        }
-
-        if (message.serverContent?.turnComplete) {
-            const finalInput = currentInputTranscriptionRef.current.trim();
-            const finalOutput = currentOutputTranscriptionRef.current.trim();
-            currentInputTranscriptionRef.current = '';
-            currentOutputTranscriptionRef.current = '';
-
-            const newMessages: ChatMessage[] = [];
-            if (finalInput) newMessages.push({ role: 'user', text: finalInput });
-            if (finalOutput) newMessages.push({ role: 'model', text: finalOutput });
-
-            if (newMessages.length > 0) {
-                setMessages(prev => [...prev, ...newMessages]);
-            }
-        }
-
-        const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-        const outCtx = outputAudioContextRef.current;
-        if (base64Audio && outCtx) {
-            const audioBuffer = await decodeAudioData(decode(base64Audio), outCtx, 24000, 1);
-            nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outCtx.currentTime);
-            const source = outCtx.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(outCtx.destination);
-            source.addEventListener('ended', () => audioSourcesRef.current.delete(source));
-            audioSourcesRef.current.add(source);
-            source.start(nextStartTimeRef.current);
-            nextStartTimeRef.current += audioBuffer.duration;
-        }
-    }, [setMessages, handleStopCall]);
 
     const handleStartCall = useCallback(async () => {
         if (isLive || isConnecting) return;
         setIsConnecting(true);
         setMicPermission('prompt');
+        
+        // This object will hold all our live resources so we can clean them up.
+        const liveResources: {
+            session: LiveSession | null,
+            stream: MediaStream | null,
+            inputCtx: AudioContext | null,
+            outputCtx: AudioContext | null,
+            workletNode: AudioWorkletNode | null,
+            audioSources: Set<AudioBufferSourceNode>
+        } = {
+            session: null,
+            stream: null,
+            inputCtx: null,
+            outputCtx: null,
+            workletNode: null,
+            audioSources: new Set()
+        };
 
+        const stop = () => {
+            liveResources.session?.close();
+            liveResources.stream?.getTracks().forEach(track => track.stop());
+            liveResources.workletNode?.port.close();
+            liveResources.workletNode?.disconnect();
+            if (liveResources.inputCtx?.state !== 'closed') liveResources.inputCtx?.close();
+            if (liveResources.outputCtx?.state !== 'closed') liveResources.outputCtx?.close();
+            liveResources.audioSources.forEach(source => source.stop());
+            liveResources.audioSources.clear();
+            setIsLive(false);
+            setIsConnecting(false);
+        };
+        stopCallRef.current = stop;
+        
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaStreamRef.current = stream;
+            liveResources.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             setMicPermission('granted');
 
-            const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-            const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-            inputAudioContextRef.current = inCtx;
-            outputAudioContextRef.current = outCtx;
-            await Promise.all([inCtx.resume(), outCtx.resume()]);
+            liveResources.inputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            liveResources.outputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+            await Promise.all([liveResources.inputCtx.resume(), liveResources.outputCtx.resume()]);
 
             const workletURL = URL.createObjectURL(new Blob([audioProcessorWorkletString], { type: 'application/javascript' }));
-            await inCtx.audioWorklet.addModule(workletURL);
+            await liveResources.inputCtx.audioWorklet.addModule(workletURL);
             URL.revokeObjectURL(workletURL);
 
-            const source = inCtx.createMediaStreamSource(stream);
-            const workletNode = new AudioWorkletNode(inCtx, 'audio-processor');
-            workletNodeRef.current = workletNode;
-            const muteNode = inCtx.createGain();
+            const source = liveResources.inputCtx.createMediaStreamSource(liveResources.stream);
+            liveResources.workletNode = new AudioWorkletNode(liveResources.inputCtx, 'audio-processor');
+            const muteNode = liveResources.inputCtx.createGain();
             muteNode.gain.value = 0;
-            source.connect(workletNode).connect(muteNode).connect(inCtx.destination);
+            source.connect(liveResources.workletNode).connect(muteNode).connect(liveResources.inputCtx.destination);
             
-            const session = await createLiveSession(scenario, messages, selectedLang, {
+            let nextStartTime = 0;
+
+            const onmessage = async (message: LiveServerMessage) => {
+                if (message.toolCall?.functionCalls?.[0]?.name === 'connectCall') {
+                    onSuccess();
+                    stop();
+                    return;
+                }
+                if (message.serverContent?.outputTranscription) currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
+                if (message.serverContent?.inputTranscription) currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
+                if (message.serverContent?.turnComplete) {
+                    const finalInput = currentInputTranscriptionRef.current.trim();
+                    const finalOutput = currentOutputTranscriptionRef.current.trim();
+                    currentInputTranscriptionRef.current = '';
+                    currentOutputTranscriptionRef.current = '';
+                    const newMessages: ChatMessage[] = [];
+                    if (finalInput) newMessages.push({ role: 'user', text: finalInput });
+                    if (finalOutput) newMessages.push({ role: 'model', text: finalOutput });
+                    if (newMessages.length > 0) setMessages(prev => [...prev, ...newMessages]);
+                }
+                const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                const outCtx = liveResources.outputCtx;
+                if (base64Audio && outCtx) {
+                    const audioBuffer = await decodeAudioData(decode(base64Audio), outCtx, 24000, 1);
+                    nextStartTime = Math.max(nextStartTime, outCtx.currentTime);
+                    const audioSource = outCtx.createBufferSource();
+                    audioSource.buffer = audioBuffer;
+                    audioSource.connect(outCtx.destination);
+                    audioSource.addEventListener('ended', () => liveResources.audioSources.delete(audioSource));
+                    liveResources.audioSources.add(audioSource);
+                    audioSource.start(nextStartTime);
+                    nextStartTime += audioBuffer.duration;
+                }
+            };
+            
+            liveResources.session = await createLiveSession(scenario, messages, selectedLang, {
                 onopen: () => { setIsConnecting(false); setIsLive(true); },
                 onmessage,
-                onerror: (e) => { console.error("Session error:", e); handleStopCall(); },
-                onclose: () => { console.log("Session closed."); handleStopCall(); },
+                onerror: (e) => { console.error("Session error:", e); stop(); },
+                onclose: () => { stop(); },
             });
+            sessionRef.current = liveResources.session;
 
-            liveSessionRef.current = session;
-            workletNode.port.onmessage = (event) => {
-                session.sendRealtimeInput({ media: event.data as MediaBlob });
+            liveResources.workletNode.port.onmessage = (event) => {
+                liveResources.session?.sendRealtimeInput({ media: event.data as MediaBlob });
             };
         } catch (err) {
             console.error("Failed to start call:", err);
             if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
                 setMicPermission('denied');
             }
-            handleStopCall();
+            stop();
         }
-    }, [isLive, isConnecting, scenario, messages, selectedLang, onmessage, handleStopCall]);
-
-    useEffect(() => {
-        return () => {
-            handleStopCall();
-        };
-    }, [handleStopCall]);
+    }, [isLive, isConnecting, scenario, messages, selectedLang, setMessages, onSuccess]);
 
     const handleEndAndFeedback = () => {
-        handleStopCall();
-        onEndSimulationRef.current();
+        stopCallRef.current?.();
+        onEndSimulation();
     };
 
     const callButtonDisabled = isConnecting || isReadOnly;
@@ -350,7 +334,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                         </button>
                     ) : (
                         <button
-                            onClick={handleStopCall}
+                            onClick={() => stopCallRef.current?.()}
                             className="px-4 py-3 flex items-center justify-center gap-2 rounded-md font-semibold transition-colors bg-red-600 hover:bg-red-700 text-white"
                         >
                             <PhoneIcon className="transform -rotate-135" />
