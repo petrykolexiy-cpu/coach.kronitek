@@ -130,7 +130,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
   const handleStartCall = async () => {
     setIsConnecting(true);
     setMicError(null);
-    setMessages([]);
 
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -146,7 +145,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         outputAudioContextRef.current = outputCtx;
         nextStartTime.current = 0;
 
-        const sessionPromise = createLiveSession(scenario, selectedLang, {
+        const sessionPromise = createLiveSession(scenario, messages, selectedLang, {
             onopen: () => {
                 console.log('Session opened');
                 setIsConnecting(false);

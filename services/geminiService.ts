@@ -111,6 +111,7 @@ export async function decodeAudioData(
 // New function to manage the real-time voice session
 export function createLiveSession(
     scenario: Scenario,
+    history: ChatMessage[],
     language: string,
     callbacks: {
         onmessage: (message: LiveServerMessage) => void;
@@ -123,7 +124,17 @@ export function createLiveSession(
     // to access environment variables in a client-side Vite application.
     const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY });
 
+    const formattedHistory = history.map(msg => `${msg.role === 'user' ? 'Sales Manager' : 'Gatekeeper'}: ${msg.text}`).join('\n');
+
     const systemInstruction = `You are a world-class AI, expertly role-playing a corporate gatekeeper for a highly realistic, real-time voice sales training simulation. Your performance must be indistinguishable from a real, professional human.
+
+    ${formattedHistory && `
+    **//-- PREVIOUS CONVERSATION HISTORY --//**
+    This is the conversation that has happened so far. You MUST continue the conversation naturally from this point.
+    ---
+    ${formattedHistory}
+    ---
+    ` }
 
     **//-- SCENARIO CONTEXT --//**
     - **Your Persona:** "${scenario.gatekeeperPersona}"
