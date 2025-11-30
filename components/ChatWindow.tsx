@@ -1,15 +1,22 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ChatMessage, Scenario, MediaBlob } from '../types';
 import { createLiveSession, decode, decodeAudioData } from '../services/geminiService';
-// FIX: Replaced non-existent 'LiveSession' type with 'Connection' from the '@google/genai' package
-// to correctly type the live session object.
-import { LiveServerMessage, Connection } from '@google/genai';
+// FIX: The `Connection` type is not exported from the `@google/genai` package.
+// We infer the session type directly from our `createLiveSession` function for type safety.
+import { LiveServerMessage } from '@google/genai';
 
 // FIX: Add type definition for 'window.webkitAudioContext' to support older Safari versions
 // and resolve TypeScript errors. This is necessary for cross-browser compatibility.
-interface Window {
-    webkitAudioContext: typeof AudioContext;
+// The `declare global` block correctly augments the global Window interface.
+declare global {
+    interface Window {
+        webkitAudioContext: typeof AudioContext;
+    }
 }
+
+// This utility type correctly infers the session object type from the promise
+// returned by our service function, avoiding the need for `any`.
+type LiveSession = Awaited<ReturnType<typeof createLiveSession>>;
 
 // This is the complete, self-contained audio processing engine that runs in a separate background thread.
 // It handles buffering, PCM conversion, and Base64 encoding, ensuring the main UI thread never freezes.
@@ -128,7 +135,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     const [isConnecting, setIsConnecting] = useState(false);
     const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
 
-    const liveSessionRef = useRef<Connection | null>(null);
+    const liveSessionRef = useRef<LiveSession | null>(null);
     const inputAudioContextRef = useRef<AudioContext | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -226,8 +233,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             mediaStreamRef.current = stream;
             setMicPermission('granted');
 
-            const inCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            const outCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+            const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+            const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
             inputAudioContextRef.current = inCtx;
             outputAudioContextRef.current = outCtx;
             await Promise.all([inCtx.resume(), outCtx.resume()]);

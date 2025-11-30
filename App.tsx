@@ -7,13 +7,23 @@ import { ChatWindow } from './components/ChatWindow';
 import { FeedbackPanel } from './components/FeedbackPanel';
 import { ApiKeyPrompt } from './components/ApiKeyPrompt';
 
+const SUCCESS_MESSAGES: { [key: string]: (name: string) => string } = {
+    'en-US': (name) => `🎉 Success! You've been connected with ${name}. Click "End & Get Feedback" to see your analysis.`,
+    'ru-RU': (name) => `🎉 Успех! Вы соединились с ${name}. Нажмите "Завершить и получить отзыв", чтобы увидеть анализ.`,
+    'uk-UA': (name) => `🎉 Успіх! Вас з'єднали з ${name}. Натисніть "Завершити та отримати відгук", щоб побачити аналіз.`,
+    'de-DE': (name) => `🎉 Erfolg! Sie wurden mit ${name} verbunden. Klicken Sie auf "Beenden & Feedback erhalten", um Ihre Analyse zu sehen.`,
+    'es-ES': (name) => `🎉 ¡Éxito! Te han conectado con ${name}. Haz clic en "Finalizar y obtener comentarios" para ver tu análisis.`,
+    'fr-FR': (name) => `🎉 Succès ! Vous avez été mis en relation avec ${name}. Cliquez sur "Terminer et obtenir un feedback" pour voir votre analyse.`,
+    'fil-PH': (name) => `🎉 Tagumpay! Nakakonekta ka na kay ${name}. I-click ang "Tapusin at Kumuha ng Feedback" para makita ang iyong pagsusuri.`,
+};
+
 const App: React.FC = () => {
   const [currentScenario, setCurrentScenario] = useState<Scenario | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [isLoadingFeedback, setIsLoadingFeedback] = useState(false);
   const [isSimulationSuccess, setIsSimulationSuccess] = useState(false);
-  const [selectedLang, setSelectedLang] = useState('ru-RU');
+  const [selectedLang, setSelectedLang] = useState('uk-UA');
 
   const handleSelectScenario = useCallback((scenario: Scenario) => {
     setCurrentScenario(scenario);
@@ -27,15 +37,25 @@ const App: React.FC = () => {
     if (!currentScenario || messages.length === 0 || isLoadingFeedback) return;
     
     setIsLoadingFeedback(true);
-    const successMessage: ChatMessage = { 
-        role: 'model', 
-        text: `🎉 Успех! Вы соединились с ${currentScenario.decisionMaker}. Нажмите "Завершить и получить отзыв", чтобы увидеть анализ.` 
-    };
+    
+    // This is the correct way to handle state updates before an async call.
+    // Create a new variable with the final state of the messages array.
+    let updatedMessages = [...messages];
+
     if (isSimulationSuccess) {
-      setMessages(prev => [...prev, successMessage]);
+      const successText = SUCCESS_MESSAGES[selectedLang]?.(currentScenario.decisionMaker) || SUCCESS_MESSAGES['en-US'](currentScenario.decisionMaker);
+      const successMessage: ChatMessage = { 
+          role: 'model', 
+          text: successText
+      };
+      updatedMessages.push(successMessage);
+      // Update the UI with the final list of messages.
+      setMessages(updatedMessages);
     }
 
-    const performanceFeedback = await getPerformanceFeedback(currentScenario, messages, isSimulationSuccess, selectedLang);
+    // Pass the guaranteed up-to-date message list to the feedback function.
+    const performanceFeedback = await getPerformanceFeedback(currentScenario, updatedMessages, isSimulationSuccess, selectedLang);
+    
     setFeedback(performanceFeedback);
     setIsLoadingFeedback(false);
   }, [currentScenario, messages, isSimulationSuccess, selectedLang, isLoadingFeedback]);
