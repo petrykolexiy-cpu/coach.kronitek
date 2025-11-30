@@ -139,6 +139,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ scenario, messages, setM
         const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
         const inputCtx = new AudioContext({ sampleRate: 16000 });
         const outputCtx = new AudioContext({ sampleRate: 24000 });
+        
+        // FIX: Explicitly resume AudioContexts. Browsers may initialize them in a
+        // 'suspended' state, which would prevent any audio processing from occurring.
+        // Resuming them ensures the microphone input is captured and processed.
+        if (inputCtx.state === 'suspended') {
+            await inputCtx.resume();
+        }
+        if (outputCtx.state === 'suspended') {
+            await outputCtx.resume();
+        }
+        
         inputAudioContextRef.current = inputCtx;
         outputAudioContextRef.current = outputCtx;
         nextStartTime.current = 0;
